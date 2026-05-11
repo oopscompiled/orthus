@@ -1,0 +1,21 @@
+[project]
+name = "orthus"
+version = "0.1.0"
+description = "AI action firewall normalization layer"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3.0",
+  "pytest-benchmark>=5.1.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+  "benchmark: performance-oriented benchmark tests",
+]
