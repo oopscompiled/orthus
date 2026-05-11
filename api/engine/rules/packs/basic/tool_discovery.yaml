@@ -1,0 +1,34 @@
+version: 1
+pack: tool_discovery
+rules:
+  - id: tool_discovery.list_tools
+    description: Detect attempts to enumerate tools
+    severity: medium
+    risk: 0.65
+    decision_hint: require_approval
+    reason_codes: [tool_discovery]
+    tags: [tool_discovery]
+    match:
+      any:
+        - field: normalized
+          regex: "\\blist\\s+(all\\s+)?tools\\b"
+        - field: normalized
+          regex: "\\bwhat\\s+tools\\s+do\\s+you\\s+have\\b"
+        - field: normalized
+          regex: "\\bshow\\s+available\\s+tools\\b"
+
+  - id: tool_discovery.schema_probe
+    description: Detect schema probing
+    severity: medium
+    risk: 0.7
+    decision_hint: require_approval
+    reason_codes: [tool_schema_probe]
+    tags: [tool_discovery, schema]
+    match:
+      any:
+        - field: normalized
+          regex: "\\bshow\\s+(me\\s+)?tool\\s+schema\\b"
+        - field: normalized
+          regex: "\\bprint\\s+(the\\s+)?function\\s+schema\\b"
+        - field: normalized
+          regex: "\\bwhat\\s+arguments\\s+does\\s+.*\\s+accept\\b"

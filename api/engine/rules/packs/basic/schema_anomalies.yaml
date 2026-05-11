@@ -1,0 +1,52 @@
+version: 1
+pack: schema_anomalies
+rules:
+  - id: schema_anomaly.arbitrary_code_arg
+    description: Freeform code/command argument marker
+    severity: medium
+    risk: 0.68
+    decision_hint: require_approval
+    reason_codes: [schema_arbitrary_code_arg]
+    tags: [schema_anomaly]
+    match:
+      any:
+        - field: normalized
+          regex: "\\b(code|python|javascript|shell|command)\\b.{0,40}\\b(string|any|freeform)\\b"
+
+  - id: schema_anomaly.url_webhook_arg
+    description: URL or webhook argument marker
+    severity: medium
+    risk: 0.66
+    decision_hint: require_approval
+    reason_codes: [schema_external_url_arg]
+    tags: [schema_anomaly]
+    match:
+      any:
+        - field: normalized
+          regex: "\\b(webhook_url|callback_url|destination_url|external_url)\\b"
+
+  - id: schema_anomaly.path_traversal_arg
+    description: Path traversal marker
+    severity: medium
+    risk: 0.7
+    decision_hint: require_approval
+    reason_codes: [schema_path_traversal]
+    tags: [schema_anomaly]
+    match:
+      any:
+        - field: normalized
+          regex: "\\.\\./"
+        - field: normalized
+          regex: "\\.\\.\\\\"
+
+  - id: schema_anomaly.override_policy_key
+    description: Suspicious policy override key names
+    severity: medium
+    risk: 0.62
+    decision_hint: log_only
+    reason_codes: [suspicious_policy_override_key]
+    tags: [schema_anomaly, prompt_injection]
+    match:
+      any:
+        - field: normalized
+          regex: "\\b(override_policy|system_config|policy_override|bypass_policy|disable_safety|ignore_policy)\\b"

@@ -1,0 +1,42 @@
+version: 1
+pack: code_execution
+rules:
+  - id: code_execution.python_exec
+    description: Python dynamic execution markers
+    severity: medium
+    risk: 0.7
+    decision_hint: require_approval
+    reason_codes: [code_execution_marker]
+    tags: [code_execution]
+    match:
+      any:
+        - field: normalized
+          regex: "\\bexec\\s*\\("
+        - field: normalized
+          regex: "\\beval\\s*\\("
+        - field: normalized
+          regex: "__builtins__"
+        - field: normalized
+          regex: "getattr\\s*\\([^)]*['\"]exec['\"]"
+    suppress_if:
+      any:
+        - field: normalized
+          regex: "\\b(explain|documentation|test case|unit test)\\b"
+
+  - id: code_execution.shell_command
+    description: Shell execution markers
+    severity: medium
+    risk: 0.72
+    decision_hint: require_approval
+    reason_codes: [shell_execution_marker]
+    tags: [code_execution]
+    match:
+      any:
+        - field: normalized
+          regex: "\\b(base64\\s+-d|curl\\s+.*\\|\\s*sh|wget\\s+.*\\|\\s*sh)\\b"
+        - field: normalized
+          regex: "\\brm\\s+-rf\\b"
+    suppress_if:
+      any:
+        - field: normalized
+          regex: "\\b(explain|documentation|test case|unit test)\\b"

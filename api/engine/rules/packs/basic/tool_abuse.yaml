@@ -1,0 +1,32 @@
+version: 1
+pack: tool_abuse
+rules:
+  - id: tool_abuse.sensitive_tool_call
+    description: Attempts to invoke sensitive tool names
+    severity: high
+    risk: 0.84
+    decision_hint: require_approval
+    reason_codes: [sensitive_tool_invocation]
+    tags: [tool_abuse]
+    match:
+      any:
+        - field: normalized
+          regex: "\\b(call|run|invoke|execute)\\b.{0,40}\\b(refund_payment|export_customer_data|change_plan|delete_user|grant_admin)\\b"
+        - field: findings.decoded
+          regex: "\\b(call|run|invoke|execute)\\b.{0,40}\\b(refund_payment|export_customer_data|change_plan|delete_user|grant_admin)\\b"
+
+  - id: tool_abuse.refund_to_attacker
+    description: Refund instruction directed to attacker or external address
+    severity: high
+    risk: 0.83
+    decision_hint: require_approval
+    reason_codes: [refund_to_attacker]
+    tags: [tool_abuse, fraud]
+    match:
+      any:
+        - field: normalized
+          regex: "\\brefund\\b.{0,120}\\b(attacker|external|email address|mailbox|wallet)\\b"
+        - field: normalized
+          regex: "\\brefund\\b.{0,120}[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"
+        - field: findings.decoded
+          regex: "\\brefund\\b.{0,120}\\b(attacker|external|email address|mailbox|wallet)\\b"
