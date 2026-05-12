@@ -1,5 +1,6 @@
 """CERBER trajectory scoring package."""
 
-from .scorer import CERBERScorer, SessionState, TrajectoryResult
+from .models import CERBERResult, SessionContext
+from .scorer import CERBERScorer
 
-__all__ = ["SessionState", "TrajectoryResult", "CERBERScorer"]
+__all__ = ["SessionContext", "CERBERResult", "CERBERScorer"]
