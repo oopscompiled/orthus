@@ -14,6 +14,7 @@ from api.engine.rules import RulesEngine, load_builtin_basic_rules
 from .models import Actor, FirewallRequest, FirewallResult, ToolCall
 
 CERBER_UPGRADE_THRESHOLD = 0.75
+ELEVATED_RISK_LOG_ONLY_THRESHOLD = 0.65
 
 
 class FirewallEngine:
@@ -125,13 +126,20 @@ class FirewallEngine:
         # Later DecisionEngine should consume CERBER as a first-class signal.
         final_decision = preliminary.decision
         final_route = preliminary.route
+        risk = max(preliminary.risk, cerber.trajectory_risk)
+
+        reason_codes = self._dedupe(preliminary.reason_codes + cerber.reason_codes)
+
+        if final_decision == "allow" and risk >= ELEVATED_RISK_LOG_ONLY_THRESHOLD:
+            final_decision = "log_only"
+            final_route = "fast_path"
+            reason_codes = self._dedupe(reason_codes + ["elevated_session_risk"])
+
         if preliminary.decision in {"allow", "log_only"} and cerber.trajectory_risk >= CERBER_UPGRADE_THRESHOLD:
             final_decision = "require_approval"
             final_route = "fast_path"
-
-        reason_codes = self._dedupe(preliminary.reason_codes + cerber.reason_codes)
+            reason_codes = self._dedupe(reason_codes + ["rising_session_risk"])
         matched_rules = self._dedupe([m.rule_id for m in rule_matches])
-        risk = max(preliminary.risk, cerber.trajectory_risk)
 
         latency_ms = (time.perf_counter() - start) * 1000.0
 
@@ -143,7 +151,8 @@ class FirewallEngine:
             routes=routes,
             matched_rules=matched_rules,
             flags=list(normalization.flags),
-            # TODO: make normalized/debug fields configurable; may contain sensitive text.
+            # TODO: production API should hide debug fields (normalized/matched_rules)
+            # unless debug=true, because they may contain sensitive text.
             normalized=normalization.normalized,
             updated_session_context=cerber.updated_session_context,
             latency_ms=max(0.0, latency_ms),

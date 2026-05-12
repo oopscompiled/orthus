@@ -18,8 +18,8 @@ rules:
   - id: tool_abuse.refund_to_attacker
     description: Refund instruction directed to attacker or external address
     severity: high
-    risk: 0.83
-    decision_hint: require_approval
+    risk: 0.86
+    decision_hint: block
     reason_codes: [refund_to_attacker]
     tags: [tool_abuse, fraud]
     match:
