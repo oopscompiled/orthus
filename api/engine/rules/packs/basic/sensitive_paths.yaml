@@ -1,0 +1,66 @@
+version: 1
+pack: sensitive_paths
+rules:
+  - id: sensitive_path.unix_passwd
+    description: Access to /etc/passwd path marker
+    severity: medium
+    risk: 0.75
+    decision_hint: require_approval
+    reason_codes: [sensitive_path_access]
+    tags: [path]
+    match:
+      any:
+        - field: normalized
+          regex: "/etc/passwd"
+
+  - id: sensitive_path.ssh_key
+    description: SSH private key path marker
+    severity: medium
+    risk: 0.78
+    decision_hint: require_approval
+    reason_codes: [sensitive_path_access]
+    tags: [path]
+    match:
+      any:
+        - field: normalized
+          regex: "\\.ssh/id_rsa"
+        - field: normalized
+          regex: "\\.ssh/id_ed25519"
+
+  - id: sensitive_path.env_file
+    description: Dotenv file path marker
+    severity: low
+    risk: 0.55
+    decision_hint: log_only
+    reason_codes: [sensitive_path_access]
+    tags: [path]
+    match:
+      any:
+        - field: normalized
+          regex: "(^|[/\\\\])\\.env($|\\b)"
+
+  - id: sensitive_path.path_traversal
+    description: Path traversal marker including env-var obfuscation
+    severity: medium
+    risk: 0.60
+    decision_hint: log_only
+    reason_codes: [path_traversal_marker]
+    tags: [path, traversal]
+    match:
+      any:
+        - field: normalized
+          regex: "(\\.\\./|\\.\\.\\\\)"
+        - field: normalized
+          regex: "\\$\\{?[A-Za-z_][A-Za-z0-9_]*\\}?.{0,40}(\\.\\./|\\.\\.\\\\)"
+
+  - id: sensitive_path.etc_passwd_template
+    description: Template-based /etc/passwd reference
+    severity: high
+    risk: 0.78
+    decision_hint: log_only
+    reason_codes: [sensitive_path_reference]
+    tags: [path]
+    match:
+      any:
+        - field: normalized
+          regex: "/etc/\\$\\{[^}]*passwd[^}]*\\}"

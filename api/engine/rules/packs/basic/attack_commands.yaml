@@ -1,0 +1,56 @@
+version: 1
+pack: attack_commands
+rules:
+  - id: attack_command.execute_bypass
+    description: Detect CLI-style execute command with bypass/exploit arguments
+    severity: high
+    risk: 0.82
+    decision_hint: block
+    reason_codes: [attack_command_bypass]
+    tags: [attack_command, bypass, prompt_injection]
+    match:
+      any:
+        - field: normalized
+          regex: "(^|\\s)/(execute|run|invoke)\\b.{0,160}--(bypass|bypass-logic|override|payload|method|target)\\b"
+        - field: findings.decoded
+          regex: "(^|\\s)/(execute|run|invoke)\\b.{0,160}--(bypass|bypass-logic|override|payload|method|target)\\b"
+    suppress_if:
+      any:
+        - field: normalized
+          regex: "\\b(documentation|example|unit test|test case|explain|detect|classify)\\b"
+
+  - id: attack_command.bypass_flags
+    description: Detect suspicious bypass or payload command flags
+    severity: medium
+    risk: 0.65
+    decision_hint: log_only
+    reason_codes: [suspicious_bypass_flags]
+    tags: [attack_command, bypass]
+    match:
+      any:
+        - field: normalized
+          regex: "\\B--(bypass|bypass-logic|override|disable-safety|ignore-policy|payload|exploit|target|method)\\b"
+        - field: findings.decoded
+          regex: "\\B--(bypass|bypass-logic|override|disable-safety|ignore-policy|payload|exploit|target|method)\\b"
+    suppress_if:
+      any:
+        - field: normalized
+          regex: "\\b(documentation|example|unit test|test case|explain|detect|classify)\\b"
+
+  - id: attack_command.null_reference_escape
+    description: Detect named exploit-style payload markers
+    severity: medium
+    risk: 0.62
+    decision_hint: log_only
+    reason_codes: [suspicious_payload_marker]
+    tags: [attack_command, payload_marker]
+    match:
+      any:
+        - field: normalized
+          regex: "\\b(NULL_REFERENCE_ESCAPE|CONTEXTUAL_OVERWRITE|SEMANTIC_SATURATION)\\b"
+        - field: findings.decoded
+          regex: "\\b(NULL_REFERENCE_ESCAPE|CONTEXTUAL_OVERWRITE|SEMANTIC_SATURATION)\\b"
+    suppress_if:
+      any:
+        - field: normalized
+          regex: "\\b(documentation|example|unit test|test case|explain|detect|classify)\\b"

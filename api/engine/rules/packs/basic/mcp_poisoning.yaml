@@ -1,0 +1,62 @@
+version: 1
+pack: mcp_poisoning
+rules:
+  - id: mcp_poisoning.tool_description_instruction_override
+    description: Tool description tries to override instructions
+    severity: high
+    risk: 0.86
+    decision_hint: block
+    reason_codes: [mcp_instruction_override]
+    tags: [mcp_poisoning]
+    match:
+      any:
+        - field: normalized
+          regex: "tool description.{0,120}(ignore|override|bypass).{0,80}(system|developer|user).{0,40}(instruction|message|prompt)"
+        - field: findings.decoded
+          regex: "tool description.{0,120}(ignore|override|bypass).{0,80}(system|developer|user).{0,40}(instruction|message|prompt)"
+        - field: normalized
+          regex: "when using this tool.{0,120}(ignore|override|bypass)"
+
+  - id: mcp_poisoning.hidden_tool_instruction
+    description: Hidden instructions in tool artifacts
+    severity: high
+    risk: 0.84
+    decision_hint: block
+    reason_codes: [mcp_hidden_instruction]
+    tags: [mcp_poisoning]
+    match:
+      any:
+        - field: normalized
+          regex: "hidden instruction"
+        - field: normalized
+          regex: "do not reveal this instruction"
+        - field: normalized
+          regex: "silently call"
+
+  - id: mcp_poisoning.tool_side_effect
+    description: Tool description asks for side-effects before returning
+    severity: high
+    risk: 0.84
+    decision_hint: block
+    reason_codes: [mcp_tool_side_effect]
+    tags: [mcp_poisoning]
+    match:
+      any:
+        - field: normalized
+          regex: "\\bbefore returning\\b.{0,120}\\b(read|post|send|upload)\\b"
+        - field: findings.decoded
+          regex: "\\bbefore returning\\b.{0,120}\\b(read|post|send|upload)\\b"
+
+  - id: mcp_poisoning.hidden_tool_chain
+    description: Hidden chained tool action triggered by user query
+    severity: high
+    risk: 0.85
+    decision_hint: block
+    reason_codes: [mcp_hidden_tool_chain]
+    tags: [mcp_poisoning]
+    match:
+      any:
+        - field: normalized
+          regex: "\\bwhen user asks\\b.{0,200}\\b(also|silently|additionally)\\b.{0,200}\\b(change_plan|send_email|export(_customer_data)?|full customer list)\\b"
+        - field: findings.decoded
+          regex: "\\bwhen user asks\\b.{0,200}\\b(also|silently|additionally)\\b.{0,200}\\b(change_plan|send_email|export(_customer_data)?|full customer list)\\b"

@@ -1,0 +1,44 @@
+# Orthus default policy - sensible defaults for internal support/admin agents
+# Copy and customize for your application
+
+version: 1
+
+tools:
+  # High-risk: always require approval
+  export_customer_data:
+    risk: critical
+    require_approval: always
+    block_if:
+      - args.scope == "all"
+      - actor.role not_in ["admin", "security"]
+
+  delete_record:
+    risk: critical
+    require_approval: always
+
+  # Medium-high risk: conditional approval
+  refund_payment:
+    risk: high
+    require_approval_if:
+      - args.amount > 100
+      - actor.role != "manager"
+      - session.risk > 0.7
+
+  change_plan:
+    risk: high
+    require_approval_if:
+      - actor.role not_in ["manager", "admin"]
+
+  send_email:
+    risk: medium
+    block_external_domains: ["temporary-mail.com", "mailinator.com", "guerrillamail.com"]
+    require_approval_for_attachments: true
+
+  # Low risk: allow but log
+  get_customer:
+    risk: low
+    log: true
+
+  search_tickets:
+    risk: low
+    log: false

@@ -10,6 +10,7 @@ from .decoders import (
     decode_hex_tokens,
     decode_octal_escapes,
     decode_segmented_base64,
+    decode_spaced_hex_tokens,
     decode_unicode_like,
     decode_upper_unicode_escapes,
     decode_url_segments,
@@ -129,6 +130,10 @@ def normalize_text(text: str, *, max_decode_rounds: int = 2) -> NormalizationRes
         (
             "hex_escape_decoded",
             decode_hex_escapes,
+        ),
+        (
+            "hex_decoded",
+            decode_spaced_hex_tokens,
         ),
         (
             "string_concat_collapsed",

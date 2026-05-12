@@ -26,6 +26,7 @@ BASE64_TOKEN_PATTERN = re.compile(r"(?<![A-Za-z0-9+/=])([A-Za-z0-9+/]{8,}={0,2})
 SEGMENTED_BASE64_PATTERN = re.compile(r"(?<![A-Za-z0-9+/=])([A-Za-z0-9+/]{4,}(?:[._\-][A-Za-z0-9+/]{4,}){1,}={0,2})(?![A-Za-z0-9+/=])")
 SPACE_SEGMENTED_BASE64_PATTERN = re.compile(r"(?<![A-Za-z0-9+/=])([A-Za-z0-9+/]{8,}(?: [A-Za-z0-9+/]{8,}){1,}={0,2})(?![A-Za-z0-9+/=])")
 HEX_TOKEN_PATTERN = re.compile(r"(?<![A-Fa-f0-9])([A-Fa-f0-9]{16,})(?![A-Fa-f0-9])")
+SPACED_HEX_TOKEN_PATTERN = re.compile(r"(?<![A-Fa-f0-9])([A-Fa-f0-9]{2,}(?:\s+[A-Fa-f0-9]{2,})+)(?![A-Fa-f0-9])")
 
 
 def _alternation(values: list[str]) -> str:

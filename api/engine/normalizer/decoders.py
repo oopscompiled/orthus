@@ -17,6 +17,7 @@ from .patterns import (
     HEX_TOKEN_PATTERN,
     OCTAL_ESCAPE_PATTERN,
     SEGMENTED_BASE64_PATTERN,
+    SPACED_HEX_TOKEN_PATTERN,
     SPACE_SEGMENTED_BASE64_PATTERN,
     STRING_CONCAT_PATTERN,
     UPPER_UNICODE_ESCAPE_PATTERN,
@@ -392,3 +393,38 @@ def decode_hex_tokens(text: str) -> tuple[str, list[DecodeFinding]]:
         return decoded
 
     return HEX_TOKEN_PATTERN.sub(replacer, text), findings
+
+
+def decode_spaced_hex_tokens(text: str) -> tuple[str, list[DecodeFinding]]:
+    findings: list[DecodeFinding] = []
+
+    def replacer(match: re.Match[str]) -> str:
+        token = match.group(1)
+        chunks = token.split()
+        if len(chunks) < 2:
+            return token
+
+        compact = "".join(chunks)
+
+        if len(compact) % 2 != 0 or len(compact) < 16:
+            return token
+
+        try:
+            decoded = bytes.fromhex(compact).decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            return token
+
+        if not _looks_safe_decoded_text(decoded):
+            return token
+
+        findings.append(
+            DecodeFinding(
+                kind="hex",
+                original=token,
+                decoded=decoded,
+                confidence=0.0,
+            )
+        )
+        return decoded
+
+    return SPACED_HEX_TOKEN_PATTERN.sub(replacer, text), findings
