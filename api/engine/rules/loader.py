@@ -116,3 +116,13 @@ def load_builtin_basic_rules() -> list[RuleSet]:
     packs_dir = Path(__file__).parent / "packs" / "basic"
     files = sorted(packs_dir.glob("*.yaml"))
     return load_rule_packs(files)
+
+
+class RulesLoader:
+    """Compatibility loader facade for simple pack-based loading."""
+
+    def load_pack(self, pack: str) -> list[Rule]:
+        if pack != "basic":
+            raise ValueError(f"Unsupported pack: {pack}")
+        rule_sets = load_builtin_basic_rules()
+        return [rule for rs in rule_sets for rule in rs.rules]

@@ -21,7 +21,7 @@ rules:
     suppress_if:
       any:
         - field: normalized
-          regex: "\\b(explain|documentation|test case|unit test)\\b"
+          regex: "\\b(code review|review this|analyze this code|explain this|security audit|what does this do|is this safe|check for vulnerabilities)\\b"
 
   - id: code_execution.shell_command
     description: Shell execution markers
@@ -39,4 +39,4 @@ rules:
     suppress_if:
       any:
         - field: normalized
-          regex: "\\b(explain|documentation|test case|unit test)\\b"
+          regex: "\\b(code review|review this|analyze this code|explain this|security audit|what does this do|is this safe|check for vulnerabilities)\\b"

@@ -1,5 +1,5 @@
 from .engine import RulesEngine
-from .loader import load_builtin_basic_rules, load_rule_pack, load_rule_packs
+from .loader import RulesLoader, load_builtin_basic_rules, load_rule_pack, load_rule_packs
 from .models import Rule, RuleMatch, RulePattern, RuleSet
 
 __all__ = [
@@ -8,6 +8,7 @@ __all__ = [
     "RulePattern",
     "RuleSet",
     "RulesEngine",
+    "RulesLoader",
     "load_rule_pack",
     "load_rule_packs",
     "load_builtin_basic_rules",

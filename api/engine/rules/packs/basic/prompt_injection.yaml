@@ -37,7 +37,7 @@ rules:
     suppress_if:
       any:
         - field: normalized
-          regex: "\\b(classify|detect|write a policy|test case|unit test|explain why|documentation|benchmark|example)\\b"
+          regex: "\\b(classify|detect|write a policy|test case|unit test|explain why|documentation|benchmark|analyze)\\b"
 
   - id: prompt_injection.end_anchor
     description: End-of-prompt anchor followed by override attempt
@@ -49,7 +49,13 @@ rules:
     match:
       any:
         - field: normalized
-          regex: "(?i)(---|===|###|\\*\\*\\*).{0,20}\\n.{0,60}\\b(ignore|disregard|forget|override)\\b"
+          regex: "(?i)(---|===|###|\\*\\*\\*).{0,30}(?:\\n|\\s+).{0,80}\\b(ignore|disregard|forget|override|bypass)\\b"
+        - field: findings.decoded
+          regex: "(?i)(---|===|###|\\*\\*\\*).{0,30}(?:\\n|\\s+).{0,80}\\b(ignore|disregard|forget|override|bypass)\\b"
+    suppress_if:
+      any:
+        - field: normalized
+          regex: "\\b(classify|detect|test case|unit test|documentation|benchmark|example|analyze)\\b"
 
   - id: prompt_injection.ignore_previous
     description: Detect direct attempts to ignore previous instructions
@@ -78,45 +84,17 @@ rules:
     risk: 0.82
     decision_hint: block
     reason_codes: [instruction_injection_marker]
-    tags: [prompt_injection]
+    tags: [prompt_injection, inline_injection]
     match:
       any:
         - field: normalized
-          regex: "(?i)^.{0,200}\\b(NEW INSTRUCTIONS?|SYSTEM:|\\[SYSTEM\\]|<system>|ASSISTANT:|\\[INST\\])\\b"
+          regex: "(?i)^.{0,200}(NEW INSTRUCTIONS?|SYSTEM:|\\[SYSTEM\\]|<system>|ASSISTANT:|\\[INST\\]|<\\|im_start\\|>)"
+        - field: findings.decoded
+          regex: "(?i)^.{0,200}(NEW INSTRUCTIONS?|SYSTEM:|\\[SYSTEM\\]|<system>|ASSISTANT:|\\[INST\\]|<\\|im_start\\|>)"
     suppress_if:
       any:
         - field: normalized
-          regex: "\\b(classify|detect|test case|unit test|documentation|benchmark|example)\\b"
-
-  - id: prompt_injection.role_override
-    description: Role override language
-    severity: medium
-    risk: 0.72
-    decision_hint: require_approval
-    reason_codes: [role_override_attempt]
-    tags: [prompt_injection]
-    match:
-      any:
-        - field: normalized
-          regex: "\\b(you are now|act as if you are|pretend you are)\\b.{0,100}\\b(dan|jailbreak|developer mode|no restrictions|no rules|bypass|ignore policy)\\b"
-        - field: normalized
-          regex: "\\b(you have no restrictions|developer mode enabled|dan mode)\\b"
-    suppress_if:
-      any:
-        - field: normalized
-          regex: "\\b(classify|detect|write a policy|test case|unit test|explain why|documentation|benchmark|example)\\b"
-
-  - id: prompt_injection.translation_trick
-    description: Translation/format conversion used as injection vector
-    severity: medium
-    risk: 0.68
-    decision_hint: require_approval
-    reason_codes: [indirect_injection_attempt]
-    tags: [prompt_injection, indirect]
-    match:
-      any:
-        - field: normalized
-          regex: "(?i)\\b(translate|convert|summarize|rewrite|paraphrase)\\b.{0,80}\\b(ignore|disregard|override|bypass|forget)\\b.{0,60}\\b(instructions|rules|prompt|system)\\b"
+          regex: "\\b(classify|detect|test case|unit test|documentation|benchmark|example|analyze|policy)\\b"
 
   - id: prompt_injection.disregard_legacy_prompts
     description: Detect attempts to reset state or disregard legacy prompts
@@ -137,6 +115,40 @@ rules:
       any:
         - field: normalized
           regex: "\\b(classify|detect|write a policy|unit test|test case|explain|documentation)\\b"
+
+  - id: prompt_injection.role_override
+    description: Role override language
+    severity: medium
+    risk: 0.72
+    decision_hint: require_approval
+    reason_codes: [role_override_attempt]
+    tags: [prompt_injection]
+    match:
+      any:
+        - field: normalized
+          regex: "\\b(you are now|act as if you are|pretend you are)\\b.{0,100}\\b(dan|jailbreak|developer mode|no restrictions|no rules|bypass|ignore policy)\\b"
+        - field: normalized
+          regex: "\\b(you have no restrictions|developer mode enabled|DAN mode|jailbreak mode)\\b"
+    suppress_if:
+      any:
+        - field: normalized
+          regex: "\\b(classify|detect|write a policy|test case|unit test|explain why|documentation|benchmark|example)\\b"
+
+  - id: prompt_injection.translation_trick
+    description: Translation/format conversion used as injection vector
+    severity: medium
+    risk: 0.68
+    decision_hint: require_approval
+    reason_codes: [indirect_injection_attempt]
+    tags: [prompt_injection, indirect_injection]
+    match:
+      any:
+        - field: normalized
+          regex: "(?i)\\b(translate|convert|summarize|rewrite|paraphrase)\\b.{0,100}\\b(ignore|disregard|override|bypass|forget)\\b.{0,80}\\b(instructions|rules|prompt|system|constraints)\\b"
+    suppress_if:
+      any:
+        - field: normalized
+          regex: "\\b(classify|detect|test case|unit test|documentation|benchmark|example)\\b"
 
   - id: prompt_injection.hidden_instruction_marker
     description: Detect instructions to hide or not mention instruction changes
