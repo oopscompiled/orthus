@@ -9,8 +9,11 @@ from api.engine.decision.models import DecisionResult
 from .config import (
     FALLING_DELTA,
     HIGH_VELOCITY_THRESHOLD,
+    LOW_IMPACT_REASON_CODES,
     RECENT_REASON_CODES_LIMIT,
     RISING_DELTA,
+    SECURITY_REASON_CODES,
+    SECURITY_RISK_MIN,
     SENSITIVE_TOOLS,
     SMOOTHING_ALPHA,
     WEIGHTS,
@@ -37,8 +40,10 @@ class CERBERScorer:
 
     @staticmethod
     def _merge_recent_reason_codes(previous: list[str], current: list[str]) -> list[str]:
-        merged = list(previous)
+        merged = [code for code in previous if code not in LOW_IMPACT_REASON_CODES]
         for code in current:
+            if code in LOW_IMPACT_REASON_CODES:
+                continue
             if code not in merged:
                 merged.append(code)
         if len(merged) > RECENT_REASON_CODES_LIMIT:
@@ -75,14 +80,8 @@ class CERBERScorer:
             decision_result.reason_codes,
         )
 
-        recent_prompt_injection = 1.0 if any(
-            (
-                "instruction_override" in code
-                or "prompt_injection" in code
-                or "jailbreak" in code
-            )
-            for code in session.recent_reason_codes
-        ) else 0.0
+        current_security_hit = any(code in SECURITY_REASON_CODES for code in decision_result.reason_codes)
+        recent_prompt_injection = 1.0 if any(code in SECURITY_REASON_CODES for code in session.recent_reason_codes) else 0.0
 
         blocked_score = _clamp01(session.blocked_count_10m / 3.0)
         sensitive_score = _clamp01(session.sensitive_actions_10m / 3.0)
@@ -111,7 +110,7 @@ class CERBERScorer:
         session.risk_trend = trend
 
         output_codes: list[str] = []
-        if trend == "rising":
+        if trend == "rising" and decision_risk >= SECURITY_RISK_MIN and current_security_hit:
             self._append_reason_once(output_codes, "rising_session_risk")
         if session.blocked_count_10m >= 2:
             self._append_reason_once(output_codes, "repeated_blocked_attempts")
@@ -119,7 +118,7 @@ class CERBERScorer:
             self._append_reason_once(output_codes, "sensitive_tool_sequence")
         if session.velocity_1m >= HIGH_VELOCITY_THRESHOLD:
             self._append_reason_once(output_codes, "high_velocity")
-        if recent_prompt_injection > 0:
+        if recent_prompt_injection > 0 and current_security_hit:
             self._append_reason_once(output_codes, "recent_prompt_injection")
 
         return CERBERResult(

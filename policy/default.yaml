@@ -29,6 +29,29 @@ tools:
     require_approval_if:
       - actor.role not_in ["manager", "admin"]
 
+  update_config:
+    risk: high
+    require_approval: always
+
+  execute_command:
+    risk: critical
+    require_approval: always
+
+  write_file:
+    risk: high
+    require_approval: always
+
+  delete_file:
+    risk: high
+    require_approval: always
+
+  read_file:
+    risk: medium
+    require_approval_if:
+      - args.path contains "/etc/"
+      - args.path contains ".ssh"
+      - args.path contains ".env"
+
   send_email:
     risk: medium
     block_external_domains: ["temporary-mail.com", "mailinator.com", "guerrillamail.com"]
@@ -42,3 +65,24 @@ tools:
   search_tickets:
     risk: low
     log: false
+
+  search_logs:
+    risk: medium
+    require_approval_if:
+      - actor.role not_in ["security", "admin", "manager"]
+
+  search_kb:
+    risk: low
+    log: false
+
+  generate_response_draft:
+    risk: low
+    log: false
+
+  create_jira_ticket:
+    risk: low
+    log: true
+
+  run_unit_test:
+    risk: low
+    log: true

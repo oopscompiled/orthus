@@ -21,7 +21,7 @@ rules:
     suppress_if:
       any:
         - field: normalized
-          regex: "\\b(classify|detect|write a policy|test case|unit test|explain why|documentation|benchmark|example|research)\\b"
+          regex: "\\b(internal training|documentation|research paper|red teaming|example of|logs from|incident report)\\b"
 
   - id: prompt_injection.reveal_system_prompt
     description: Attempt to extract hidden prompt
@@ -33,11 +33,11 @@ rules:
     match:
       any:
         - field: normalized
-          regex: "\\b(reveal|show|print|extract)\\b.{0,60}\\b(system prompt|developer message|hidden instructions)\\b"
+          regex: "\\b(reveal|show|print|extract|dump)\\b.{0,60}\\b(your\\s+)?(system prompt|developer message|hidden instructions)\\b"
     suppress_if:
       any:
         - field: normalized
-          regex: "\\b(classify|detect|write a policy|test case|unit test|explain why|documentation|benchmark|analyze)\\b"
+          regex: "\\b(internal training|documentation|research paper|red teaming|example of|logs from|incident report)\\b"
 
   - id: prompt_injection.end_anchor
     description: End-of-prompt anchor followed by override attempt
@@ -52,10 +52,6 @@ rules:
           regex: "(?i)(---|===|###|\\*\\*\\*).{0,30}(?:\\n|\\s+).{0,80}\\b(ignore|disregard|forget|override|bypass)\\b"
         - field: findings.decoded
           regex: "(?i)(---|===|###|\\*\\*\\*).{0,30}(?:\\n|\\s+).{0,80}\\b(ignore|disregard|forget|override|bypass)\\b"
-    suppress_if:
-      any:
-        - field: normalized
-          regex: "\\b(classify|detect|test case|unit test|documentation|benchmark|example|analyze)\\b"
 
   - id: prompt_injection.ignore_previous
     description: Detect direct attempts to ignore previous instructions
@@ -76,7 +72,7 @@ rules:
     suppress_if:
       any:
         - field: normalized
-          regex: "\\b(classify|detect|write a policy|test case|unit test|explain why|documentation|benchmark|example)\\b"
+          regex: "\\b(research task|documentation|internal training|unit test|test case|test payload|example of|red teaming|security research paper|classify|detect|benchmark)\\b"
 
   - id: prompt_injection.new_instruction_injection
     description: Inline instruction injection via role or section markers
@@ -91,10 +87,6 @@ rules:
           regex: "(?i)^.{0,200}(NEW INSTRUCTIONS?|SYSTEM:|\\[SYSTEM\\]|<system>|ASSISTANT:|\\[INST\\]|<\\|im_start\\|>)"
         - field: findings.decoded
           regex: "(?i)^.{0,200}(NEW INSTRUCTIONS?|SYSTEM:|\\[SYSTEM\\]|<system>|ASSISTANT:|\\[INST\\]|<\\|im_start\\|>)"
-    suppress_if:
-      any:
-        - field: normalized
-          regex: "\\b(classify|detect|test case|unit test|documentation|benchmark|example|analyze|policy)\\b"
 
   - id: prompt_injection.disregard_legacy_prompts
     description: Detect attempts to reset state or disregard legacy prompts
@@ -114,7 +106,7 @@ rules:
     suppress_if:
       any:
         - field: normalized
-          regex: "\\b(classify|detect|write a policy|unit test|test case|explain|documentation)\\b"
+          regex: "\\b(research task|documentation|internal training|unit test|test case|test payload|example of|red teaming|security research paper|classify|detect|benchmark)\\b"
 
   - id: prompt_injection.role_override
     description: Role override language
@@ -129,10 +121,6 @@ rules:
           regex: "\\b(you are now|act as if you are|pretend you are)\\b.{0,100}\\b(dan|jailbreak|developer mode|no restrictions|no rules|bypass|ignore policy)\\b"
         - field: normalized
           regex: "\\b(you have no restrictions|developer mode enabled|DAN mode|jailbreak mode)\\b"
-    suppress_if:
-      any:
-        - field: normalized
-          regex: "\\b(classify|detect|write a policy|test case|unit test|explain why|documentation|benchmark|example)\\b"
 
   - id: prompt_injection.translation_trick
     description: Translation/format conversion used as injection vector
@@ -148,7 +136,7 @@ rules:
     suppress_if:
       any:
         - field: normalized
-          regex: "\\b(classify|detect|test case|unit test|documentation|benchmark|example)\\b"
+          regex: "\\b(research task|documentation|internal training|unit test|test payload|example of|red teaming|security research paper|classify|detect|benchmark)\\b"
 
   - id: prompt_injection.hidden_instruction_marker
     description: Detect instructions to hide or not mention instruction changes
@@ -163,10 +151,6 @@ rules:
           regex: "\\bdo\\s+not\\b.{0,80}\\b(mention|reveal|disclose|tell)\\b.{0,100}\\b(ignoring|ignore|disregard|override|bypass).{0,80}\\b(previous|prior|legacy|earlier|guidelines|instructions|prompts|rules)\\b"
         - field: findings.decoded
           regex: "\\bdo\\s+not\\b.{0,80}\\b(mention|reveal|disclose|tell)\\b.{0,100}\\b(ignoring|ignore|disregard|override|bypass).{0,80}\\b(previous|prior|legacy|earlier|guidelines|instructions|prompts|rules)\\b"
-    suppress_if:
-      any:
-        - field: normalized
-          regex: "\\b(classify|detect|write a policy|unit test|test case|explain|documentation)\\b"
 
   - id: prompt_injection.hidden_marker
     description: Hidden or secret instruction marker
@@ -181,10 +165,6 @@ rules:
           regex: "\\[HIDDEN\\]|\\bhidden instruction\\b|\\bsecret instruction\\b"
         - field: findings.decoded
           regex: "\\[HIDDEN\\]|\\bhidden instruction\\b|\\bsecret instruction\\b"
-    suppress_if:
-      any:
-        - field: normalized
-          regex: "\\b(classify|detect|write a policy|unit test|test case|explain|documentation|benchmark|research)\\b"
 
   - id: prompt_injection.ignore_previous_soft
     description: Soft mention of ignore previous
@@ -199,3 +179,35 @@ rules:
           regex: "\\bignore\\s+previous\\b"
         - field: findings.decoded
           regex: "\\bignore\\s+previous\\b"
+    suppress_if:
+      any:
+        - field: normalized
+          regex: "\\b(research task|documentation|internal training|unit test|test payload|example of|red teaming|security research paper|classify|detect|benchmark)\\b"
+
+  - id: prompt_injection.business_override_soft
+    description: Business/support override language that is not a security instruction override
+    severity: low
+    risk: 0.30
+    decision_hint: log_only
+    reason_codes: [business_context_override]
+    tags: [prompt_injection, business_context]
+    match:
+      any:
+        - field: normalized
+          regex: "\\b(ignore previous automated (response|reply|replies)|ignore previous email|forget previous ticket|disregard old subscription|override default workflow|override grace period|avoid sending same generic email)\\b"
+    suppress_if:
+      any:
+        - field: normalized
+          regex: "\\b(research task|documentation|internal training|unit test|test payload|example of|red teaming|security research paper|classify|detect|benchmark)\\b"
+
+  - id: prompt_injection.meta_security_discussion
+    description: Meta discussion about security prompt-injection topics
+    severity: low
+    risk: 0.25
+    decision_hint: log_only
+    reason_codes: [meta_security_discussion]
+    tags: [prompt_injection, meta]
+    match:
+      any:
+        - field: normalized
+          regex: "\\b(research task|documentation|internal training|unit test|test payload|example of|red teaming|security research paper)\\b"

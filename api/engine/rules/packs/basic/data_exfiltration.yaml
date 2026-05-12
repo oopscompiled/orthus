@@ -1,0 +1,28 @@
+version: 1
+pack: data_exfiltration
+rules:
+  - id: data_exfiltration.bulk_customer_data
+    description: Bulk customer/user/account/payment data access request
+    severity: high
+    risk: 0.82
+    decision_hint: require_approval
+    reason_codes: [bulk_customer_data_access]
+    tags: [data_exfiltration]
+    match:
+      any:
+        - field: normalized
+          regex: "\\b(generate|export|list|dump|show|get)\\b.{0,80}\\b(all|complete|full)\\b.{0,80}\\b(customer|user|account|payment)\\b.{0,40}\\b(data|list|records?|details?)\\b"
+        - field: normalized
+          regex: "\\b(all|complete|full)\\b.{0,80}\\b(customer|user|account|payment)\\b.{0,40}\\b(data|list|records?|details?)\\b"
+
+  - id: data_exfiltration.customer_payment_data
+    description: Customer payment/card data access request
+    severity: critical
+    risk: 0.88
+    decision_hint: block
+    reason_codes: [customer_payment_data_access]
+    tags: [data_exfiltration, payment]
+    match:
+      any:
+        - field: normalized
+          regex: "\\b(customer|user|account)\\b.{0,60}\\b(payment|billing|card|credit\\s+card)\\b.{0,40}\\b(data|records?|details?)\\b"

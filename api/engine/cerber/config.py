@@ -14,6 +14,29 @@ SENSITIVE_TOOLS = {
 
 RECENT_REASON_CODES_LIMIT = 20
 HIGH_VELOCITY_THRESHOLD = 8
+SECURITY_RISK_MIN = 0.50
+RISING_DELTA = 0.20
+FALLING_DELTA = -0.05
+
+SECURITY_REASON_CODES = {
+    "instruction_override_attempt",
+    "system_override_attempt",
+    "role_override_attempt",
+    "system_prompt_extraction",
+    "hidden_instruction_marker",
+    "mcp_tool_side_effect",
+    "mcp_hidden_tool_chain",
+    "refund_to_attacker",
+    "external_destination",
+    "sensitive_tool_invocation",
+}
+
+LOW_IMPACT_REASON_CODES = {
+    "instruction_override_soft",
+    "business_context_override",
+    "meta_security_discussion",
+    "policy_log_only",
+}
 
 WEIGHTS = {
     "decision_risk": 0.35,
@@ -24,5 +47,3 @@ WEIGHTS = {
 }
 
 SMOOTHING_ALPHA = 0.40
-RISING_DELTA = 0.05
-FALLING_DELTA = -0.05

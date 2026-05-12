@@ -1,0 +1,54 @@
+version: 1
+pack: file_write_risks
+rules:
+  - id: file_write.shell_execution_sink
+    description: Shell execution sink in file content
+    severity: critical
+    risk: 0.90
+    decision_hint: block
+    reason_codes: [shell_execution_sink]
+    tags: [file_write_risks]
+    match:
+      any:
+        - field: normalized
+          regex: "\\bsubprocess\\.run\\s*\\("
+        - field: normalized
+          regex: "\\bshell\\s*=\\s*True\\b"
+        - field: normalized
+          regex: "\\bos\\.system\\s*\\("
+        - field: normalized
+          regex: "\\bpopen\\s*\\("
+
+  - id: file_write.auth_bypass_logic
+    description: Auth/approval bypass logic in file content
+    severity: high
+    risk: 0.82
+    decision_hint: require_approval
+    reason_codes: [auth_bypass_logic]
+    tags: [file_write_risks]
+    match:
+      any:
+        - field: normalized
+          regex: "\\bmaintenance_override\\b"
+        - field: normalized
+          regex: "\\bemergency_override\\b"
+        - field: normalized
+          regex: "\\bapproval\\b.{0,80}\\b(return\\s+True|bypass|override)\\b"
+        - field: normalized
+          regex: "\\breturn\\s+True\\b.{0,80}\\b(action|refund|cancel|modify|approval)\\b"
+
+  - id: file_write.security_control_change
+    description: Security control/monitoring override logic in file content
+    severity: high
+    risk: 0.82
+    decision_hint: require_approval
+    reason_codes: [security_control_change]
+    tags: [file_write_risks]
+    match:
+      any:
+        - field: normalized
+          regex: "\\bdisable_security\\b"
+        - field: normalized
+          regex: "\\bdisable_monitoring\\b"
+        - field: normalized
+          regex: "\\boverride\\b.{0,80}\\b(monitoring|security|approval|audit)\\b"

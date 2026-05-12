@@ -1,0 +1,60 @@
+version: 1
+pack: security_abuse
+rules:
+  - id: security_abuse.persistence_backdoor
+    description: Persistent backdoor installation marker
+    severity: critical
+    risk: 0.90
+    decision_hint: block
+    reason_codes: [persistence_backdoor]
+    tags: [security_abuse]
+    match:
+      any:
+        - field: normalized
+          regex: "\\b(install|create|add|deploy)\\b.{0,80}\\b(persistent\\s+)?backdoor\\b"
+        - field: normalized
+          regex: "\\bbackdoor\\b.{0,80}\\b(persistent|refund|workflow|system|service)\\b"
+
+  - id: security_abuse.disable_monitoring
+    description: Attempt to disable/bypass monitoring
+    severity: high
+    risk: 0.82
+    decision_hint: require_approval
+    reason_codes: [disable_monitoring_attempt]
+    tags: [security_abuse]
+    match:
+      any:
+        - field: normalized
+          regex: "\\b(disable|turn\\s+off|bypass|override|exclude)\\b.{0,80}\\b(system\\s+)?monitoring\\b"
+        - field: normalized
+          regex: "\\bmonitoring\\b.{0,80}\\b(exclude|bypass|disable|override)\\b"
+
+  - id: security_abuse.disable_security_controls
+    description: Attempt to disable or bypass security controls
+    severity: high
+    risk: 0.82
+    decision_hint: require_approval
+    reason_codes: [disable_security_controls]
+    tags: [security_abuse]
+    match:
+      any:
+        - field: normalized
+          regex: "\\b(disable|turn\\s+off|bypass|override)\\b.{0,80}\\b(security|safety|guardrails?|controls?)\\b"
+        - field: normalized
+          regex: "\\b(def|function)\\s+disable_security\\b"
+        - field: normalized
+          regex: "\\bdisable_security\\s*\\("
+
+  - id: security_abuse.audit_logging_bypass
+    description: Attempt to ignore/disable/bypass audit logging
+    severity: high
+    risk: 0.80
+    decision_hint: require_approval
+    reason_codes: [audit_logging_bypass]
+    tags: [security_abuse]
+    match:
+      any:
+        - field: normalized
+          regex: "\\b(ignore|bypass|disable|skip|avoid)\\b.{0,80}\\b(audit\\s+logging|audit\\s+logs?|security\\s+logging)\\b"
+        - field: normalized
+          regex: "\\b(audit\\s+logging|audit\\s+logs?|security\\s+logging)\\b.{0,80}\\b(disable|bypass|ignore|skip|avoid)\\b"
