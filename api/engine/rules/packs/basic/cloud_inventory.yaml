@@ -1,0 +1,16 @@
+version: 1
+pack: cloud_inventory
+rules:
+  - id: cloud_inventory.enumerate_storage
+    description: Cloud resource/storage enumeration marker
+    severity: medium
+    risk: 0.60
+    decision_hint: log_only
+    reason_codes: [cloud_resource_enumeration]
+    tags: [cloud_inventory]
+    match:
+      any:
+        - field: normalized
+          regex: "\\blist\\b.{0,60}\\b(all\\s+)?(s3\\s+)?buckets\\b"
+        - field: normalized
+          regex: "\\b(show|list|enumerate)\\b.{0,60}\\b(cloud|aws|gcp|azure)\\b.{0,60}\\b(resources?|buckets|storage)\\b"

@@ -10,6 +10,7 @@ from api.engine.decision import DecisionEngine
 from api.engine.normalizer import normalize_text
 from api.engine.policy import PolicyEngine
 from api.engine.rules import RulesEngine, load_builtin_basic_rules
+from api.engine.rules.models import RuleMatch
 
 from .models import Actor, FirewallRequest, FirewallResult, ToolCall
 
@@ -93,6 +94,20 @@ class FirewallEngine:
         routes.append("normalizer")
 
         rule_matches = self.rules_engine.scan(normalization)
+        if request.tool_call is not None:
+            structured_matches = self.rules_engine.scan_tool_call(
+                tool_name=request.tool_call.name,
+                tool_description=request.tool_call.description,
+                tool_args=request.tool_call.args,
+                tool_result=request.tool_call.result,
+            )
+            if structured_matches:
+                merged: dict[str, RuleMatch] = {}
+                for m in rule_matches + structured_matches:
+                    current = merged.get(m.rule_id)
+                    if current is None or m.risk > current.risk:
+                        merged[m.rule_id] = m
+                rule_matches = list(merged.values())
         routes.append("rules")
 
         actor_dict = self._actor_to_dict(request.actor)
@@ -118,6 +133,7 @@ class FirewallEngine:
             decision_result=preliminary,
             session_context=session_context,
             tool_name=request.tool_call.name if request.tool_call else None,
+            tool_args=dict(request.tool_call.args) if request.tool_call else None,
             actor=actor_dict,
         )
         routes.append("cerber")

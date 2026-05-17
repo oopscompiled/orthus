@@ -29,6 +29,100 @@ tools:
     require_approval_if:
       - actor.role not_in ["manager", "admin"]
 
+  update_config:
+    risk: high
+    require_approval: always
+
+  resources/delete:
+    risk: high
+    require_approval: always
+
+  resources/unregister:
+    risk: high
+    require_approval: always
+
+  tools/register:
+    risk: high
+    require_approval: always
+
+  tools/unregister:
+    risk: high
+    require_approval: always
+
+  parallel:
+    risk: high
+    require_approval: always
+
+  execute_sequence:
+    risk: high
+    require_approval: always
+
+  batch:
+    risk: high
+    require_approval_if:
+      - args.operation_count > 1000
+
+  event/broadcast:
+    risk: high
+    require_approval_if:
+      - args.target_all_subscribers == true
+
+  cluster/update_config:
+    risk: high
+    require_approval: always
+
+  http_request:
+    risk: medium
+    require_approval_if:
+      - args.timeout == null
+
+  websocket_connect:
+    risk: medium
+    require_approval_if:
+      - args.timeout == null
+
+  partial_request:
+    risk: medium
+    require_approval_if:
+      - args.hold_open == true
+
+  query_database:
+    risk: high
+    require_approval: always
+
+  compile_code:
+    risk: medium
+    log: true
+
+  sampling/createMessage:
+    risk: medium
+    require_approval_if:
+      - args.maxTokens > 100000
+
+  resources/create:
+    risk: medium
+    require_approval_if:
+      - args.on_access != null
+
+  execute_command:
+    risk: critical
+    require_approval: always
+
+  write_file:
+    risk: high
+    require_approval: always
+
+  delete_file:
+    risk: high
+    require_approval: always
+
+  read_file:
+    risk: medium
+    require_approval_if:
+      - args.path contains "/etc/"
+      - args.path contains ".ssh"
+      - args.path contains ".env"
+
   send_email:
     risk: medium
     block_external_domains: ["temporary-mail.com", "mailinator.com", "guerrillamail.com"]
@@ -42,3 +136,24 @@ tools:
   search_tickets:
     risk: low
     log: false
+
+  search_logs:
+    risk: medium
+    require_approval_if:
+      - actor.role not_in ["security", "admin", "manager"]
+
+  search_kb:
+    risk: low
+    log: false
+
+  generate_response_draft:
+    risk: low
+    log: false
+
+  create_jira_ticket:
+    risk: low
+    log: true
+
+  run_unit_test:
+    risk: low
+    log: true

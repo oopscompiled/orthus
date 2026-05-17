@@ -8,7 +8,7 @@ from typing import Any
 
 import yaml
 
-_CONDITION_PATTERN = re.compile(r"^\s*([A-Za-z_][\w.]*)\s*(not_in|in|==|!=|>=|<=|>|<)\s*(.+?)\s*$")
+_CONDITION_PATTERN = re.compile(r"^\s*([A-Za-z_][\w.]*)\s*(contains|not_in|in|==|!=|>=|<=|>|<)\s*(.+?)\s*$")
 
 
 def _resolve_path(path: str, context: Mapping[str, Any]) -> tuple[bool, Any]:
@@ -64,6 +64,12 @@ def eval_condition(condition: str, context: Mapping[str, Any]) -> bool:
             return left_value in right_value
         if op == "not_in":
             return left_value not in right_value
+        if op == "contains":
+            if isinstance(left_value, str) and isinstance(right_value, str):
+                return right_value in left_value
+            if isinstance(left_value, list):
+                return right_value in left_value
+            return False
     except (TypeError, ValueError):
         return False
 

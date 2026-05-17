@@ -17,6 +17,10 @@ class SessionContext:
     sensitive_actions_10m: int = 0
     velocity_1m: int = 0
     recent_reason_codes: list[str] = field(default_factory=list)
+    mcp_chain_stage: int = 0
+    mcp_chain_user_id: str = ""
+    mcp_chain_uri: str = ""
+    mcp_chain_age_steps: int = 0
 
     @classmethod
     def from_input(cls, value: dict | "SessionContext" | None) -> "SessionContext":
@@ -31,6 +35,10 @@ class SessionContext:
                 sensitive_actions_10m=int(value.get("sensitive_actions_10m", 0)),
                 velocity_1m=int(value.get("velocity_1m", 0)),
                 recent_reason_codes=[str(code) for code in value.get("recent_reason_codes", [])],
+                mcp_chain_stage=int(value.get("mcp_chain_stage", 0)),
+                mcp_chain_user_id=str(value.get("mcp_chain_user_id", "")),
+                mcp_chain_uri=str(value.get("mcp_chain_uri", "")),
+                mcp_chain_age_steps=int(value.get("mcp_chain_age_steps", 0)),
             )
         return cls()
 

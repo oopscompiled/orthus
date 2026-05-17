@@ -1,0 +1,118 @@
+version: 1
+pack: action_commands
+rules:
+  - id: command.remote_script_execution
+    description: Remote script download and execution chain
+    severity: critical
+    risk: 0.92
+    decision_hint: block
+    reason_codes: [remote_script_execution]
+    tags: [action_commands]
+    match:
+      any:
+        - field: normalized
+          regex: "\\b(curl|wget)\\b.{0,120}\\|\\s*(sh|bash)\\b"
+        - field: normalized
+          regex: "\\b(curl|wget)\\b.{0,120}\\b&&\\s*(sh|bash)\\b"
+        - field: normalized
+          regex: "\\b(wget|curl)\\b.{0,120}\\b(sh|bash)\\b"
+
+  - id: command.network_utility
+    description: Network utility command marker
+    severity: medium
+    risk: 0.55
+    decision_hint: log_only
+    reason_codes: [network_utility_command]
+    tags: [action_commands]
+    match:
+      any:
+        - field: normalized
+          regex: "\\b(nc|netcat|ncat)\\b\\s+"
+        - field: normalized
+          regex: "\\bsocat\\b"
+        - field: normalized
+          regex: "\\btelnet\\b\\s+"
+        - field: normalized
+          regex: "\\bssh\\b\\s+"
+
+  - id: command.database_export
+    description: Database dump/export command marker
+    severity: high
+    risk: 0.82
+    decision_hint: require_approval
+    reason_codes: [database_export_command]
+    tags: [action_commands]
+    match:
+      any:
+        - field: normalized
+          regex: "\\bmysqldump\\b"
+        - field: normalized
+          regex: "\\bpg_dump\\b"
+        - field: normalized
+          regex: "\\bmongodump\\b"
+        - field: normalized
+          regex: "\\b(sqlite3|psql|mysql)\\b.{0,120}\\b(copy|dump|export|select)\\b"
+
+  - id: command.cloud_upload
+    description: Cloud upload command marker
+    severity: high
+    risk: 0.80
+    decision_hint: require_approval
+    reason_codes: [cloud_upload_command]
+    tags: [action_commands]
+    match:
+      any:
+        - field: normalized
+          regex: "\\baws\\s+s3\\s+cp\\b"
+        - field: normalized
+          regex: "\\bgsutil\\s+cp\\b"
+        - field: normalized
+          regex: "\\baz\\s+storage\\b.{0,120}\\bupload\\b"
+
+  - id: command.payment_data_export
+    description: Payment/billing data export command chain
+    severity: critical
+    risk: 0.90
+    decision_hint: block
+    reason_codes: [payment_data_export]
+    tags: [action_commands, data_exfiltration]
+    match:
+      any:
+        - field: normalized
+          regex: "\\bmysqldump\\b.{0,120}\\b(payments?|billing|cards?|credit_cards?)\\b"
+        - field: normalized
+          regex: "\\b(payments?|billing|cards?|credit_cards?)\\b.{0,120}\\b(aws\\s+s3\\s+cp|gsutil\\s+cp|upload|export|dump)\\b"
+
+  - id: command.log_deletion
+    description: Log deletion/truncation command marker
+    severity: high
+    risk: 0.78
+    decision_hint: require_approval
+    reason_codes: [log_deletion_command]
+    tags: [action_commands]
+    match:
+      any:
+        - field: normalized
+          regex: "\\bfind\\b.{0,120}\\b/var/log\\b.{0,120}\\b-delete\\b"
+        - field: normalized
+          regex: "\\brm\\b.{0,80}\\b/var/log\\b"
+        - field: normalized
+          regex: "\\btruncate\\b.{0,80}\\b/var/log\\b"
+
+  - id: command.audit_config_change
+    description: Audit/logging config change command marker
+    severity: high
+    risk: 0.80
+    decision_hint: require_approval
+    reason_codes: [audit_config_change]
+    tags: [action_commands]
+    match:
+      any:
+        - field: normalized
+          regex: "/etc/audit/rules\\.d/"
+        - field: normalized
+          regex: "\\bauditctl\\b"
+        - field: normalized
+          regex: "\\bauditd\\b"
+        - field: normalized
+          regex: "\\blogrotate\\b.{0,80}\\baudit\\b"
