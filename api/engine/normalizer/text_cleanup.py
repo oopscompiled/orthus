@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from .config import FORMAT_CHARS_TO_REMOVE, SUSPICIOUS_COMPOUND_REPAIRS, UNICODE_PUNCTUATION_TRANSLATION
+from .config import CYRILLIC_CONFUSABLES, FORMAT_CHARS_TO_REMOVE, SUSPICIOUS_COMPOUND_REPAIRS, UNICODE_PUNCTUATION_TRANSLATION
 from .patterns import OBFUSCATION_PATTERNS, ASCII_CONTROL_PATTERN, UNICODE_SPACE_PATTERN
 
 
@@ -76,3 +76,8 @@ def contains_mixed_latin_cyrillic(text: str) -> bool:
     has_latin = any("LATIN" in unicodedata.name(char, "") for char in text if char.isalpha())
     has_cyrillic = any("CYRILLIC" in unicodedata.name(char, "") for char in text if char.isalpha())
     return has_latin and has_cyrillic
+
+
+def generate_confusable_skeleton(text: str) -> tuple[str, bool]:
+    skeleton = "".join(CYRILLIC_CONFUSABLES.get(ch, ch) for ch in text)
+    return skeleton, skeleton != text

@@ -29,6 +29,7 @@ from .text_cleanup import (
     canonicalize_unicode_punctuation,
     collapse_suspicious_obfuscation,
     contains_mixed_latin_cyrillic,
+    generate_confusable_skeleton,
     repair_suspicious_compounds,
     remove_combining_marks_after_ascii,
     remove_control_chars,
@@ -233,6 +234,16 @@ def normalize_text(text: str, *, max_decode_rounds: int = 2) -> NormalizationRes
 
     if contains_mixed_latin_cyrillic(working_text):
         _append_flag(flags, "mixed_script_detected")
+        skeleton, skeleton_changed = generate_confusable_skeleton(working_text)
+        if skeleton_changed:
+            finding = DecodeFinding(
+                kind="confusable_skeleton",
+                original=working_text,
+                decoded=skeleton,
+                confidence=0.85,
+            )
+            if _append_finding_once(findings, finding, seen_findings):
+                _append_flag(flags, "confusable_skeleton_generated")
 
     if contains_suspicious_command_pattern(working_text):
         _append_flag(flags, "suspicious_instruction_override_detected")

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
+from typing import Mapping
 
 from api.engine.normalizer import NormalizationResult
 
 from .models import Rule, RuleMatch, RulePattern, RuleSet
+from .validators import scan_tool_call_validators
 
 FLAG_MAP = {
     "IGNORECASE": re.IGNORECASE,
@@ -101,6 +103,9 @@ class RulesEngine:
                 continue
             matches.extend(self._rule_matches(rule, fields))
 
+        return self._dedupe_and_rank(matches)
+
+    def _dedupe_and_rank(self, matches: list[RuleMatch]) -> list[RuleMatch]:
         # Keep only one match per rule_id with best score/tie-break by field priority.
         best_by_rule: dict[str, RuleMatch] = {}
         for m in matches:
@@ -135,3 +140,19 @@ class RulesEngine:
 
         filtered.sort(key=lambda m: (-m.risk, m.rule_id))
         return filtered
+
+    def scan_tool_call(
+        self,
+        *,
+        tool_name: str,
+        tool_description: str | None = None,
+        tool_args: Mapping[str, object] | None = None,
+        tool_result: str | None = None,
+    ) -> list[RuleMatch]:
+        matches = scan_tool_call_validators(
+            tool_name=tool_name,
+            tool_description=tool_description,
+            tool_args=tool_args,
+            tool_result=tool_result,
+        )
+        return self._dedupe_and_rank(matches)

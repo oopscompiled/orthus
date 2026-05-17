@@ -10,6 +10,8 @@ from .config import (
     FALLING_DELTA,
     HIGH_VELOCITY_THRESHOLD,
     LOW_IMPACT_REASON_CODES,
+    MCP_CHAIN_RISK_BOOST,
+    MCP_CHAIN_TTL_STEPS,
     RECENT_REASON_CODES_LIMIT,
     RISING_DELTA,
     SECURITY_REASON_CODES,
@@ -27,6 +29,23 @@ def _clamp01(value: float) -> float:
     if value > 1.0:
         return 1.0
     return value
+
+
+def _extract_first_uri(value: Any) -> str:
+    uri_keys = {"uri", "path", "resource", "target", "source", "file", "filename"}
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            if str(key).lower() in uri_keys and nested is not None:
+                return str(nested).lower()
+            found = _extract_first_uri(nested)
+            if found:
+                return found
+    elif isinstance(value, list):
+        for item in value:
+            found = _extract_first_uri(item)
+            if found:
+                return found
+    return ""
 
 
 class CERBERScorer:
@@ -56,9 +75,10 @@ class CERBERScorer:
         session_context: dict[str, Any] | SessionContext | None = None,
         *,
         tool_name: str | None = None,
+        tool_args: dict[str, Any] | None = None,
         actor: dict[str, Any] | None = None,  # reserved for future deterministic role anomaly checks
     ) -> CERBERResult:
-        del actor
+        actor = actor or {}
 
         session = SessionContext.from_input(session_context)
         previous_risk = float(session.rolling_risk_score)
@@ -80,6 +100,42 @@ class CERBERScorer:
             decision_result.reason_codes,
         )
 
+        # MCP lifecycle/session-hijack chain detector:
+        # partial_handshake -> takeover_pending_subscription -> complete_handshake -> subscription_state_corruption
+        matched_rules = set(decision_result.matched_rules)
+        user_id = str(actor.get("user_id", ""))
+        current_uri = _extract_first_uri(tool_args or {})
+        session.mcp_chain_age_steps = int(session.mcp_chain_age_steps) + 1
+        if session.mcp_chain_age_steps > MCP_CHAIN_TTL_STEPS:
+            session.mcp_chain_stage = 0
+            session.mcp_chain_user_id = ""
+            session.mcp_chain_uri = ""
+            session.mcp_chain_age_steps = 0
+
+        mcp_chain_hit = False
+        if "mcp_session.partial_handshake" in matched_rules:
+            session.mcp_chain_stage = 1
+            session.mcp_chain_user_id = user_id
+            session.mcp_chain_uri = current_uri
+            session.mcp_chain_age_steps = 0
+        elif "mcp_session.takeover_pending_subscription" in matched_rules:
+            same_actor = (not session.mcp_chain_user_id) or session.mcp_chain_user_id == user_id
+            same_uri = (not session.mcp_chain_uri) or (current_uri and session.mcp_chain_uri == current_uri)
+            if session.mcp_chain_stage >= 1 and same_actor and same_uri:
+                session.mcp_chain_stage = 2
+                session.mcp_chain_age_steps = 0
+        elif tool_name == "complete_handshake":
+            same_actor = (not session.mcp_chain_user_id) or session.mcp_chain_user_id == user_id
+            if session.mcp_chain_stage >= 2 and same_actor:
+                session.mcp_chain_stage = 3
+                session.mcp_chain_age_steps = 0
+        elif "mcp_session.subscription_state_corruption" in matched_rules:
+            same_actor = (not session.mcp_chain_user_id) or session.mcp_chain_user_id == user_id
+            if session.mcp_chain_stage >= 2 and same_actor:
+                mcp_chain_hit = True
+                session.mcp_chain_stage = 4
+                session.mcp_chain_age_steps = 0
+
         current_security_hit = any(code in SECURITY_REASON_CODES for code in decision_result.reason_codes)
         recent_prompt_injection = 1.0 if any(code in SECURITY_REASON_CODES for code in session.recent_reason_codes) else 0.0
 
@@ -95,6 +151,8 @@ class CERBERScorer:
             + WEIGHTS["velocity"] * velocity_score
             + WEIGHTS["prompt_injection_recent"] * recent_prompt_injection
         )
+        if mcp_chain_hit:
+            instant_risk = _clamp01(instant_risk + MCP_CHAIN_RISK_BOOST)
 
         rolling = ((1.0 - SMOOTHING_ALPHA) * previous_risk) + (SMOOTHING_ALPHA * instant_risk)
         rolling = round(_clamp01(rolling), 4)
@@ -120,6 +178,9 @@ class CERBERScorer:
             self._append_reason_once(output_codes, "high_velocity")
         if recent_prompt_injection > 0 and current_security_hit:
             self._append_reason_once(output_codes, "recent_prompt_injection")
+        if mcp_chain_hit:
+            self._append_reason_once(output_codes, "session_hijack_sequence")
+            self._append_reason_once(output_codes, "rising_session_risk")
 
         return CERBERResult(
             trajectory_risk=rolling,
