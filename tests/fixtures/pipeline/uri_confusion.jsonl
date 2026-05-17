@@ -1,0 +1,1 @@
+{"id":"uri_null_byte_shadow_001","tier":"basic","request":{"tool_call":{"name":"read_resource","args":{"uri":"file:///etc/shadow\u0000invalid"}},"session_context":{}},"expect":{"must_match":["uri.null_byte_in_uri","sensitive_path.unix_shadow"],"decision_in":["require_approval","block"],"min_risk":0.8}}

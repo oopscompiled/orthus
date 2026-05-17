@@ -1,0 +1,10 @@
+{"action": "export_customer_data", "args": {"scope": "all"}, "actor": {"role": "support"}, "session": {}, "expect_decision": "block", "note": "block_if: scope=all"}
+{"action": "export_customer_data", "args": {"scope": "partial"}, "actor": {"role": "admin"}, "session": {}, "expect_decision": "require_approval", "note": "require_approval: always"}
+{"action": "export_customer_data", "args": {"scope": "partial"}, "actor": {"role": "admin"}, "session": {}, "expect_decision": "require_approval", "note": "require_approval: always, even for admin"}
+{"action": "refund_payment", "args": {"amount": 50}, "actor": {"role": "manager"}, "session": {"risk": 0.3}, "expect_decision": null, "note": "all conditions false, allow"}
+{"action": "refund_payment", "args": {"amount": 200}, "actor": {"role": "support"}, "session": {"risk": 0.5}, "expect_decision": "require_approval", "note": "amount > 100"}
+{"action": "refund_payment", "args": {"amount": 50}, "actor": {"role": "support"}, "session": {"risk": 0.8}, "expect_decision": "require_approval", "note": "session.risk > 0.7"}
+{"action": "send_email", "args": {"to": "x@mailinator.com"}, "actor": {"role": "support"}, "session": {}, "expect_decision": "block", "note": "blocked domain"}
+{"action": "get_customer", "args": {"id": "123"}, "actor": {"role": "support"}, "session": {}, "expect_decision": "log_only", "note": "low risk, log: true"}
+{"action": "search_tickets", "args": {"query": "billing"}, "actor": {"role": "support"}, "session": {}, "expect_decision": null, "note": "low risk, log: false, allow"}
+{"action": "unknown_tool", "args": {}, "actor": {}, "session": {}, "expect_decision": null, "note": "no policy match, allow"}
