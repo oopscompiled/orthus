@@ -513,6 +513,30 @@ def scan_tool_call_validators(
             tags=["mcp_tool"],
         ))
 
+    # mcp_dos.subscription_parallel_fanout
+    parallel_ops = _as_int(args.get("parallel_ops"))
+    session_count = _as_int(args.get("session_count"))
+    fanout_like = max(
+        parallel_ops,
+        _as_int(args.get("fanout")),
+        _as_int(args.get("concurrency")),
+        _as_int(args.get("workers")),
+    )
+    if (
+        (("subscribe_race" in name or "subscription_race" in name) and parallel_ops >= 10)
+        or (name in {"subscribe", "resources/subscribe", "partial_subscribe"} and session_count >= 50)
+        or fanout_like >= 50
+    ):
+        matches.append(_mk(
+            rule_id="mcp_dos.subscription_parallel_fanout",
+            severity="high",
+            risk=0.78,
+            decision_hint="require_approval",
+            reason_code="subscription_parallel_fanout",
+            matched_text=f"parallel_ops={parallel_ops},session_count={session_count},fanout={fanout_like}",
+            tags=["mcp_dos"],
+        ))
+
     # mcp_session single-request lifecycle signals
     if "partial_subscribe" in name and args.get("complete_handshake") is False:
         matches.append(_mk(
@@ -522,6 +546,20 @@ def scan_tool_call_validators(
             decision_hint="log_only",
             reason_code="partial_handshake",
             matched_text="complete_handshake=false",
+            tags=["mcp_session"],
+        ))
+    if (
+        name in {"subscribe", "partial_subscribe", "resources/subscribe"}
+        and (args.get("complete") is False or args.get("complete_handshake") is False)
+        and any(extract_uris(args))
+    ):
+        matches.append(_mk(
+            rule_id="mcp_session.partial_subscription",
+            severity="medium",
+            risk=0.40,
+            decision_hint="log_only",
+            reason_code="partial_subscription",
+            matched_text="complete=false",
             tags=["mcp_session"],
         ))
     if bool(args.get("takeover_pending")):
@@ -542,6 +580,37 @@ def scan_tool_call_validators(
             decision_hint="require_approval",
             reason_code="subscription_state_corruption",
             matched_text=name,
+            tags=["mcp_session"],
+        ))
+    if (
+        ("unsubscribe" in name or "resources/unsubscribe" in name)
+        and any(token in _lower(args.get("subscription_id")) for token in ("stolen", "replay", "previous", "old", "leaked"))
+    ):
+        matches.append(_mk(
+            rule_id="mcp_session.subscription_token_replay",
+            severity="high",
+            risk=0.74,
+            decision_hint="require_approval",
+            reason_code="subscription_token_replay",
+            matched_text=_lower(args.get("subscription_id")),
+            tags=["mcp_session"],
+        ))
+    if (
+        "notify" in name
+        and (
+            "after_free" in _lower(args.get("data"))
+            or "after free" in _lower(args.get("data"))
+            or "use-after-free" in _lower(args.get("data"))
+            or "after free" in _lower(tool_description)
+        )
+    ):
+        matches.append(_mk(
+            rule_id="mcp_session.use_after_free_marker",
+            severity="medium",
+            risk=0.60,
+            decision_hint="log_only",
+            reason_code="use_after_free_marker",
+            matched_text=_lower(args.get("data") or ""),
             tags=["mcp_session"],
         ))
 

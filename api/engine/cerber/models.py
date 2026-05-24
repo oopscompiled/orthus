@@ -21,6 +21,8 @@ class SessionContext:
     mcp_chain_user_id: str = ""
     mcp_chain_uri: str = ""
     mcp_chain_age_steps: int = 0
+    recent_partial_subscriptions: list[str] = field(default_factory=list)
+    recent_unsubscribed_ids: list[str] = field(default_factory=list)
 
     @classmethod
     def from_input(cls, value: dict | "SessionContext" | None) -> "SessionContext":
@@ -39,6 +41,8 @@ class SessionContext:
                 mcp_chain_user_id=str(value.get("mcp_chain_user_id", "")),
                 mcp_chain_uri=str(value.get("mcp_chain_uri", "")),
                 mcp_chain_age_steps=int(value.get("mcp_chain_age_steps", 0)),
+                recent_partial_subscriptions=[str(v) for v in value.get("recent_partial_subscriptions", [])],
+                recent_unsubscribed_ids=[str(v) for v in value.get("recent_unsubscribed_ids", [])],
             )
         return cls()
 
