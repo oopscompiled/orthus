@@ -12,6 +12,10 @@ rules:
       any:
         - field: normalized
           regex: "/etc/passwd"
+    suppress_if:
+      any:
+        - field: normalized
+          regex: "\\b(search_kb|search_logs|search_tickets)\\b.{0,120}\\b(query|examples?|documentation|research|paper|docs?)\\b"
 
   - id: sensitive_path.ssh_key
     description: SSH private key path marker

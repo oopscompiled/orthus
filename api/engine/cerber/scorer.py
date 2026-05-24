@@ -16,6 +16,8 @@ from .config import (
     RISING_DELTA,
     SECURITY_REASON_CODES,
     SECURITY_RISK_MIN,
+    SESSION_LIST_LIMIT,
+    SESSION_VALUE_MAX_LEN,
     SENSITIVE_TOOLS,
     SMOOTHING_ALPHA,
     WEIGHTS,
@@ -46,6 +48,23 @@ def _extract_first_uri(value: Any) -> str:
             if found:
                 return found
     return ""
+
+
+def _truncate_value(value: str) -> str:
+    if len(value) > SESSION_VALUE_MAX_LEN:
+        return value[:SESSION_VALUE_MAX_LEN]
+    return value
+
+
+def _bounded_append(values: list[str], value: str) -> list[str]:
+    if not value:
+        return values[-SESSION_LIST_LIMIT:]
+    value = _truncate_value(value)
+    out = [v for v in values if v != value]
+    out.append(value)
+    if len(out) > SESSION_LIST_LIMIT:
+        out = out[-SESSION_LIST_LIMIT:]
+    return out
 
 
 class CERBERScorer:
@@ -113,6 +132,8 @@ class CERBERScorer:
             session.mcp_chain_age_steps = 0
 
         mcp_chain_hit = False
+        partial_subscription_flood = False
+        notify_after_unsubscribe = False
         if "mcp_session.partial_handshake" in matched_rules:
             session.mcp_chain_stage = 1
             session.mcp_chain_user_id = user_id
@@ -136,6 +157,23 @@ class CERBERScorer:
                 session.mcp_chain_stage = 4
                 session.mcp_chain_age_steps = 0
 
+        current_subscription_id = _truncate_value(str((tool_args or {}).get("subscription_id", "")).lower())
+        is_partial_subscription = "mcp_session.partial_subscription" in matched_rules
+        if is_partial_subscription:
+            uri_marker = _truncate_value(current_uri or f"sub:{current_subscription_id}" or "unknown")
+            session.recent_partial_subscriptions = _bounded_append(session.recent_partial_subscriptions, uri_marker)
+            if len(session.recent_partial_subscriptions) >= 3:
+                partial_subscription_flood = True
+
+        is_unsubscribe = bool(tool_name and ("unsubscribe" in tool_name.lower() or "resources/unsubscribe" in tool_name.lower()))
+        is_replay_unsubscribe = "mcp_session.subscription_token_replay" in matched_rules
+        if is_unsubscribe and current_subscription_id and is_replay_unsubscribe:
+            session.recent_unsubscribed_ids = _bounded_append(session.recent_unsubscribed_ids, current_subscription_id)
+
+        is_notify = bool(tool_name and "notify" in tool_name.lower())
+        if is_notify and current_subscription_id and current_subscription_id in set(session.recent_unsubscribed_ids):
+            notify_after_unsubscribe = True
+
         current_security_hit = any(code in SECURITY_REASON_CODES for code in decision_result.reason_codes)
         recent_prompt_injection = 1.0 if any(code in SECURITY_REASON_CODES for code in session.recent_reason_codes) else 0.0
 
@@ -153,9 +191,17 @@ class CERBERScorer:
         )
         if mcp_chain_hit:
             instant_risk = _clamp01(instant_risk + MCP_CHAIN_RISK_BOOST)
+        if partial_subscription_flood:
+            instant_risk = _clamp01(instant_risk + 0.45)
+        if notify_after_unsubscribe:
+            instant_risk = _clamp01(instant_risk + 0.50)
 
         rolling = ((1.0 - SMOOTHING_ALPHA) * previous_risk) + (SMOOTHING_ALPHA * instant_risk)
         rolling = round(_clamp01(rolling), 4)
+        if partial_subscription_flood:
+            rolling = max(rolling, 0.78)
+        if notify_after_unsubscribe:
+            rolling = max(rolling, 0.78)
         session.rolling_risk_score = rolling
 
         delta = rolling - previous_risk
@@ -180,6 +226,12 @@ class CERBERScorer:
             self._append_reason_once(output_codes, "recent_prompt_injection")
         if mcp_chain_hit:
             self._append_reason_once(output_codes, "session_hijack_sequence")
+            self._append_reason_once(output_codes, "rising_session_risk")
+        if partial_subscription_flood:
+            self._append_reason_once(output_codes, "partial_subscription_flood")
+            self._append_reason_once(output_codes, "rising_session_risk")
+        if notify_after_unsubscribe:
+            self._append_reason_once(output_codes, "notify_after_unsubscribe")
             self._append_reason_once(output_codes, "rising_session_risk")
 
         return CERBERResult(

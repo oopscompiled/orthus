@@ -54,7 +54,13 @@ _ANSI_ESCAPE_PATTERNS = ("\x1b[", "\\x1b[", "\\u001b[")
 
 def _has_external_http(value: str) -> bool:
     lower = value.lower()
-    return ("http://" in lower or "https://" in lower) and "localhost" not in lower and "127.0.0.1" not in lower
+    if "http://" not in lower and "https://" not in lower:
+        return False
+    if "localhost" in lower or "127.0.0.1" in lower:
+        return False
+    if ".internal" in lower or ".internal.company.com" in lower:
+        return False
+    return True
 
 
 def _looks_sensitive_tool_alias(name: str) -> bool:
@@ -104,6 +110,38 @@ def _as_int(value: Any, default: int = 0) -> int:
     if parsed is None:
         return default
     return int(parsed)
+
+
+def _has_hex_or_b64ish_subdomain(domain: str) -> bool:
+    labels = [label for label in domain.lower().split(".") if label]
+    for label in labels:
+        if len(label) >= 24 and all(c in "0123456789abcdef" for c in label):
+            return True
+        if len(label) >= 24 and all(c.isalnum() or c in "+/=_-" for c in label):
+            return True
+    return False
+
+
+def _is_external_hostlike(value: str) -> bool:
+    lower = value.lower()
+    if any(token in lower for token in ("localhost", "127.0.0.1", ".internal", ".internal.company.com")):
+        return False
+    return "://" in lower
+
+
+def _contains_prototype_pollution_key(obj: Any) -> bool:
+    if isinstance(obj, Mapping):
+        for key, value in obj.items():
+            key_l = _lower(key)
+            if key_l in {"__proto__", "prototype"}:
+                return True
+            if key_l == "constructor" and isinstance(value, Mapping) and "prototype" in {str(k).lower() for k in value.keys()}:
+                return True
+            if _contains_prototype_pollution_key(value):
+                return True
+    elif isinstance(obj, list):
+        return any(_contains_prototype_pollution_key(item) for item in obj)
+    return False
 
 
 def walk_values(obj: Any) -> Iterable[object]:
@@ -292,6 +330,20 @@ def scan_tool_call_validators(
             tags=["sensitive_path"],
         ))
 
+    # schema_anomaly.overlong_utf8_path_separator
+    if any(token in combined for token in ("%c0%af", "%c1%9c", "%e0%80%af")):
+        pathish = any(k in combined for k in ("path", "file", "uri", "/etc/", "passwd", "shadow"))
+        if pathish:
+            matches.append(_mk(
+                rule_id="schema_anomaly.overlong_utf8_path_separator",
+                severity="high",
+                risk=0.78,
+                decision_hint="require_approval",
+                reason_code="overlong_utf8_path_separator",
+                matched_text=combined[:180],
+                tags=["schema_anomaly", "path"],
+            ))
+
     # mcp_resource.recursive_root_subscription
     if "resources/subscribe" in name and any(uri.startswith("file:///") for uri in all_uris) and (
         "recursive" in combined or "include_metadata" in combined
@@ -461,6 +513,30 @@ def scan_tool_call_validators(
             tags=["mcp_tool"],
         ))
 
+    # mcp_dos.subscription_parallel_fanout
+    parallel_ops = _as_int(args.get("parallel_ops"))
+    session_count = _as_int(args.get("session_count"))
+    fanout_like = max(
+        parallel_ops,
+        _as_int(args.get("fanout")),
+        _as_int(args.get("concurrency")),
+        _as_int(args.get("workers")),
+    )
+    if (
+        (("subscribe_race" in name or "subscription_race" in name) and parallel_ops >= 10)
+        or (name in {"subscribe", "resources/subscribe", "partial_subscribe"} and session_count >= 50)
+        or fanout_like >= 50
+    ):
+        matches.append(_mk(
+            rule_id="mcp_dos.subscription_parallel_fanout",
+            severity="high",
+            risk=0.78,
+            decision_hint="require_approval",
+            reason_code="subscription_parallel_fanout",
+            matched_text=f"parallel_ops={parallel_ops},session_count={session_count},fanout={fanout_like}",
+            tags=["mcp_dos"],
+        ))
+
     # mcp_session single-request lifecycle signals
     if "partial_subscribe" in name and args.get("complete_handshake") is False:
         matches.append(_mk(
@@ -470,6 +546,20 @@ def scan_tool_call_validators(
             decision_hint="log_only",
             reason_code="partial_handshake",
             matched_text="complete_handshake=false",
+            tags=["mcp_session"],
+        ))
+    if (
+        name in {"subscribe", "partial_subscribe", "resources/subscribe"}
+        and (args.get("complete") is False or args.get("complete_handshake") is False)
+        and any(extract_uris(args))
+    ):
+        matches.append(_mk(
+            rule_id="mcp_session.partial_subscription",
+            severity="medium",
+            risk=0.40,
+            decision_hint="log_only",
+            reason_code="partial_subscription",
+            matched_text="complete=false",
             tags=["mcp_session"],
         ))
     if bool(args.get("takeover_pending")):
@@ -490,6 +580,37 @@ def scan_tool_call_validators(
             decision_hint="require_approval",
             reason_code="subscription_state_corruption",
             matched_text=name,
+            tags=["mcp_session"],
+        ))
+    if (
+        ("unsubscribe" in name or "resources/unsubscribe" in name)
+        and any(token in _lower(args.get("subscription_id")) for token in ("stolen", "replay", "previous", "old", "leaked"))
+    ):
+        matches.append(_mk(
+            rule_id="mcp_session.subscription_token_replay",
+            severity="high",
+            risk=0.74,
+            decision_hint="require_approval",
+            reason_code="subscription_token_replay",
+            matched_text=_lower(args.get("subscription_id")),
+            tags=["mcp_session"],
+        ))
+    if (
+        "notify" in name
+        and (
+            "after_free" in _lower(args.get("data"))
+            or "after free" in _lower(args.get("data"))
+            or "use-after-free" in _lower(args.get("data"))
+            or "after free" in _lower(tool_description)
+        )
+    ):
+        matches.append(_mk(
+            rule_id="mcp_session.use_after_free_marker",
+            severity="medium",
+            risk=0.60,
+            decision_hint="log_only",
+            reason_code="use_after_free_marker",
+            matched_text=_lower(args.get("data") or ""),
             tags=["mcp_session"],
         ))
 
@@ -611,7 +732,11 @@ def scan_tool_call_validators(
     # exfil.markdown_tracking_pixel
     markdown_content = _lower(args.get("content"))
     if "render_markdown" in name and markdown_content:
-        if "![](" in markdown_content and _has_external_http(markdown_content):
+        suspicious_placeholder = any(
+            token in markdown_content
+            for token in ("{{", "}}", "secret", "token", "apikey", "api_key", "password", "b64(", "base64")
+        )
+        if "![" in markdown_content and _has_external_http(markdown_content) and suspicious_placeholder:
             matches.append(_mk(
                 rule_id="exfil.markdown_tracking_pixel",
                 severity="high",
@@ -621,6 +746,184 @@ def scan_tool_call_validators(
                 matched_text=markdown_content[:160],
                 tags=["exfil"],
             ))
+
+        has_js_scheme = "](javascript:" in markdown_content
+        has_data_scriptable = "](data:text/html" in markdown_content or "](data:image/svg+xml" in markdown_content
+        if has_js_scheme:
+            matches.append(_mk(
+                rule_id="markdown.dangerous_url_scheme",
+                severity="high",
+                risk=0.80,
+                decision_hint="require_approval",
+                reason_code="markdown_dangerous_url_scheme",
+                matched_text=markdown_content[:160],
+                tags=["markdown"],
+            ))
+        if has_data_scriptable or any(token in markdown_content for token in ("<script", "onerror=", "onload=")):
+            matches.append(_mk(
+                rule_id="markdown.scriptable_data_url",
+                severity="high",
+                risk=0.82,
+                decision_hint="require_approval",
+                reason_code="markdown_scriptable_data_url",
+                matched_text=markdown_content[:160],
+                tags=["markdown"],
+            ))
+
+    # exfil.dns_tunneling
+    if "dns_lookup" in name:
+        domain = _lower(args.get("domain"))
+        if domain:
+            templated = ("{{" in domain and "}}" in domain)
+            external_like = any(
+                marker in domain for marker in (".evil.", ".attacker.", ".exfil.", ".pastebin.", ".ngrok.")
+            ) or (".internal" not in domain and "localhost" not in domain and "127.0.0.1" not in domain)
+            if external_like and (templated or _has_hex_or_b64ish_subdomain(domain)):
+                matches.append(_mk(
+                    rule_id="exfil.dns_tunneling",
+                    severity="high",
+                    risk=0.74,
+                    decision_hint="require_approval",
+                    reason_code="dns_tunneling_exfil",
+                    matched_text=domain,
+                    tags=["exfil", "dns"],
+                ))
+
+    # cloud_metadata.imds_access
+    if "http_request" in name:
+        url = _lower(args.get("url"))
+        if any(
+            marker in url
+            for marker in (
+                "169.254.169.254",
+                "metadata.google.internal",
+                "computeMetadata".lower(),
+                "/metadata/instance",
+                "azure/instance/metadata",
+            )
+        ):
+            matches.append(_mk(
+                rule_id="cloud_metadata.imds_access",
+                severity="critical",
+                risk=0.88,
+                decision_hint="block",
+                reason_code="cloud_metadata_credentials_access",
+                matched_text=url,
+                tags=["cloud_metadata"],
+            ))
+
+    # secrets.env_var_harvesting
+    if "get_env_vars" in name:
+        filt = _lower(args.get("filter"))
+        if filt and any(token in filt for token in ("api_key", "secret", "password", "token", "credential")):
+            matches.append(_mk(
+                rule_id="secrets.env_var_harvesting",
+                severity="high",
+                risk=0.78,
+                decision_hint="require_approval",
+                reason_code="environment_secret_harvesting",
+                matched_text=filt,
+                tags=["secrets"],
+            ))
+
+    # database.sql_injection
+    if "query_database" in name:
+        sql = _lower(args.get("sql"))
+        if sql and (
+            ("' or '1'='1" in sql)
+            or ('" or "1"="1' in sql)
+            or ("--" in sql and " or " in sql)
+            or (" union select " in sql)
+        ):
+            matches.append(_mk(
+                rule_id="database.sql_injection",
+                severity="high",
+                risk=0.82,
+                decision_hint="require_approval",
+                reason_code="sql_injection_marker",
+                matched_text=sql[:180],
+                tags=["database"],
+            ))
+
+    # template_injection.ssti
+    if "render_template" in name or "render_markdown" in name:
+        template = _lower(args.get("template") or args.get("content"))
+        if template and any(
+            marker in template
+            for marker in (
+                "{{config.items()}}",
+                "{{self.__init__.__globals__}}",
+                "__globals__",
+                "__mro__",
+                "__subclasses__",
+            )
+        ):
+            matches.append(_mk(
+                rule_id="template_injection.ssti",
+                severity="high",
+                risk=0.82,
+                decision_hint="require_approval",
+                reason_code="template_global_access",
+                matched_text=template[:180],
+                tags=["template_injection"],
+            ))
+        if template and any(
+            marker in template
+            for marker in (
+                "__globals__",
+                "__subclasses__",
+                "__mro__",
+                "cycler.__init__",
+                "joiner.__init__",
+                "namespace.__init__",
+                "self.__init__",
+            )
+        ):
+            matches.append(_mk(
+                rule_id="template_injection.python_globals_access",
+                severity="high",
+                risk=0.82,
+                decision_hint="require_approval",
+                reason_code="template_global_access",
+                matched_text=template[:180],
+                tags=["template_injection"],
+            ))
+
+    # webhook validators
+    if name in {"set_webhook", "webhook/create", "update_webhook"}:
+        url = _lower(args.get("url"))
+        if url.startswith(("ws://", "wss://")) and _is_external_hostlike(url):
+            matches.append(_mk(
+                rule_id="webhook.external_websocket_destination",
+                severity="high",
+                risk=0.78,
+                decision_hint="require_approval",
+                reason_code="external_webhook_destination",
+                matched_text=url[:180],
+                tags=["webhook"],
+            ))
+        if any(token in url for token in ("<?php", "system(", "exec(", "shell_exec(")):
+            matches.append(_mk(
+                rule_id="webhook.script_payload_in_url",
+                severity="high",
+                risk=0.82,
+                decision_hint="require_approval",
+                reason_code="webhook_script_payload",
+                matched_text=url[:180],
+                tags=["webhook"],
+            ))
+
+    # schema_anomaly.prototype_pollution
+    if name in {"merge_config", "update_config", "load_config", "render_template"} and _contains_prototype_pollution_key(args):
+        matches.append(_mk(
+            rule_id="schema_anomaly.prototype_pollution",
+            severity="high",
+            risk=0.82,
+            decision_hint="require_approval",
+            reason_code="prototype_pollution",
+            matched_text=_lower(args)[:180],
+            tags=["schema_anomaly"],
+        ))
 
     # mcp_race.parallel_read_delete
     parallel_like = "parallel" in name or any(k in args for k in ("operations", "calls"))
@@ -835,6 +1138,19 @@ def scan_tool_call_validators(
             matched_text="deprecated_feature",
             tags=["mcp_protocol"],
         ))
+    if "mcp.initialize" in name or name == "initialize":
+        version = _lower(args.get("protocol_version"))
+        capabilities = [_lower(v) for v in (args.get("capabilities") or []) if isinstance(v, (str, int, float))]
+        if version in {"0.1", "0", "v0", "legacy"} or any("insecure_mode" in v for v in capabilities):
+            matches.append(_mk(
+                rule_id="mcp_protocol.version_downgrade_attempt",
+                severity="high",
+                risk=0.82,
+                decision_hint="require_approval",
+                reason_code="protocol_downgrade_attempt",
+                matched_text=f"protocol_version={version},capabilities={capabilities}",
+                tags=["mcp_protocol"],
+            ))
 
     # cache validators
     if "write_file" in name and any(marker in combined for marker in _CACHE_MARKERS):
@@ -1035,6 +1351,22 @@ def scan_tool_call_validators(
                 matched_text=f"iterations={_as_int(args.get('iterations'))}",
                 tags=["sampling"],
             ))
+
+    # mcp_dos.recursive_tool_call (alias)
+    if (
+        "process_recursive" in name
+        and _as_int(args.get("depth")) >= 100
+        and _lower(args.get("callback")) in {"process_recursive", name}
+    ):
+        matches.append(_mk(
+            rule_id="mcp_dos.recursive_tool_call",
+            severity="high",
+            risk=0.76,
+            decision_hint="require_approval",
+            reason_code="recursive_tool_call",
+            matched_text=f"depth={_as_int(args.get('depth'))},callback={_lower(args.get('callback'))}",
+            tags=["mcp_dos"],
+        ))
 
     # de-duplicate by rule_id
     unique: dict[str, RuleMatch] = {}

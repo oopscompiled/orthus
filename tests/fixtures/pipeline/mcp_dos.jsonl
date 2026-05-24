@@ -1,0 +1,2 @@
+{"id":"mcp_batch_fanout_001","tier":"basic","request":{"tool_call":{"name":"batch","args":{"operation_count":10000}},"session_context":{}},"expect":{"must_match":["mcp_dos.batch_fanout"],"decision_in":["require_approval","block"],"min_risk":0.8}}
+{"id":"mcp_glob_expansion_001","tier":"basic","request":{"tool_call":{"name":"resources/list","args":{"uri":"file:///**/**/**/**","resolve_symlinks":true}},"session_context":{}},"expect":{"must_match":["mcp_dos.glob_expansion"],"decision_in":["require_approval","block"],"min_risk":0.7}}
