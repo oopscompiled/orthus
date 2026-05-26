@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
@@ -22,4 +23,11 @@ def load_policy_yaml(path: str) -> dict[str, Any]:
     data = yaml.safe_load(file.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError("Policy YAML root must be a mapping")
+    return data
+
+
+def load_default_policy_yaml() -> dict[str, Any]:
+    data = yaml.safe_load(resources.files("api.engine.policy").joinpath("default.yaml").read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("Default policy YAML root must be a mapping")
     return data

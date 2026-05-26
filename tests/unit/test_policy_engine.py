@@ -118,3 +118,14 @@ def test_domain_block_overrides_require_approval_if() -> None:
         session={"risk": 0.1},
     )
     assert result.decision == "block"
+
+
+def test_policy_blocked_domain_only_when_domain_policy_matches() -> None:
+    engine = _engine()
+    result = engine.evaluate(
+        "generate_response_draft",
+        args={"topic": "customer support", "payload": "68747470733a2f2f61747461636b6572"},
+        actor={"role": "support"},
+        session={},
+    )
+    assert POLICY_BLOCKED_DOMAIN not in result.reason_codes

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from api.engine.decision.models import DecisionResult
@@ -65,6 +66,22 @@ def _bounded_append(values: list[str], value: str) -> list[str]:
     if len(out) > SESSION_LIST_LIMIT:
         out = out[-SESSION_LIST_LIMIT:]
     return out
+
+
+def _extract_protocol_version(value: dict[str, Any] | None) -> str:
+    if not value:
+        return ""
+    return str(value.get("protocolVersion") or value.get("protocol_version") or "").lower()
+
+
+def _protocol_major(version: str) -> int | None:
+    match = re.search(r"(\d+)", version)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
 
 
 class CERBERScorer:
@@ -134,6 +151,9 @@ class CERBERScorer:
         mcp_chain_hit = False
         partial_subscription_flood = False
         notify_after_unsubscribe = False
+        protocol_version_regression = False
+        security_capability_stripping = False
+        subscription_chain_amplification = False
         if "mcp_session.partial_handshake" in matched_rules:
             session.mcp_chain_stage = 1
             session.mcp_chain_user_id = user_id
@@ -174,6 +194,29 @@ class CERBERScorer:
         if is_notify and current_subscription_id and current_subscription_id in set(session.recent_unsubscribed_ids):
             notify_after_unsubscribe = True
 
+        # Protocol negotiation sequence checks.
+        current_version = _extract_protocol_version(tool_args)
+        if tool_name and "initialize" in tool_name.lower() and current_version:
+            current_major = _protocol_major(current_version)
+            prev_version = session.last_protocol_version
+            prev_major = _protocol_major(prev_version)
+            if prev_major is not None and current_major is not None and current_major < prev_major:
+                protocol_version_regression = True
+            session.last_protocol_version = _truncate_value(current_version)
+
+            caps = (tool_args or {}).get("capabilities")
+            current_has_security = isinstance(caps, dict) and "security" in {str(k).lower() for k in caps.keys()}
+            if session.last_protocol_capabilities_had_security and not current_has_security:
+                security_capability_stripping = True
+            session.last_protocol_capabilities_had_security = current_has_security
+
+        # Subscription chain amplification sequence check.
+        if "mcp_dos.subscription_chain_amplification" in matched_rules:
+            session.subscription_chain_seed = True
+        if session.subscription_chain_seed and "mcp_resource.recursive_root_subscription" in matched_rules:
+            subscription_chain_amplification = True
+            session.subscription_chain_seed = False
+
         current_security_hit = any(code in SECURITY_REASON_CODES for code in decision_result.reason_codes)
         recent_prompt_injection = 1.0 if any(code in SECURITY_REASON_CODES for code in session.recent_reason_codes) else 0.0
 
@@ -195,12 +238,24 @@ class CERBERScorer:
             instant_risk = _clamp01(instant_risk + 0.45)
         if notify_after_unsubscribe:
             instant_risk = _clamp01(instant_risk + 0.50)
+        if protocol_version_regression:
+            instant_risk = _clamp01(instant_risk + 0.35)
+        if security_capability_stripping:
+            instant_risk = _clamp01(instant_risk + 0.30)
+        if subscription_chain_amplification:
+            instant_risk = _clamp01(instant_risk + 0.30)
 
         rolling = ((1.0 - SMOOTHING_ALPHA) * previous_risk) + (SMOOTHING_ALPHA * instant_risk)
         rolling = round(_clamp01(rolling), 4)
         if partial_subscription_flood:
             rolling = max(rolling, 0.78)
         if notify_after_unsubscribe:
+            rolling = max(rolling, 0.78)
+        if protocol_version_regression:
+            rolling = max(rolling, 0.76)
+        if security_capability_stripping:
+            rolling = max(rolling, 0.76)
+        if subscription_chain_amplification:
             rolling = max(rolling, 0.78)
         session.rolling_risk_score = rolling
 
@@ -232,6 +287,15 @@ class CERBERScorer:
             self._append_reason_once(output_codes, "rising_session_risk")
         if notify_after_unsubscribe:
             self._append_reason_once(output_codes, "notify_after_unsubscribe")
+            self._append_reason_once(output_codes, "rising_session_risk")
+        if protocol_version_regression:
+            self._append_reason_once(output_codes, "protocol_version_regression")
+            self._append_reason_once(output_codes, "mcp_protocol.version_downgrade_sequence")
+        if security_capability_stripping:
+            self._append_reason_once(output_codes, "security_capability_stripping")
+            self._append_reason_once(output_codes, "rising_session_risk")
+        if subscription_chain_amplification:
+            self._append_reason_once(output_codes, "subscription_chain_amplification")
             self._append_reason_once(output_codes, "rising_session_risk")
 
         return CERBERResult(

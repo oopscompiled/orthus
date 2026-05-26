@@ -1,4 +1,4 @@
-.PHONY: test eval eval-json demo demo-debug claude-demo api smoke all
+.PHONY: test eval eval-json demo demo-debug claude-demo api smoke release-smoke all
 
 test:
 	uv run pytest tests/ -v
@@ -30,6 +30,9 @@ smoke:
 	uv run python examples/support_copilot/demo.py
 	uv run python examples/claude_agent_sdk_guard/demo.py
 	uv run python -c "from api.server.app import app; print('api import ok')"
+
+release-smoke:
+	./scripts/release_smoke.sh
 
 all:
 	make test

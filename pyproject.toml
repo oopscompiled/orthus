@@ -1,7 +1,11 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "orthus"
 version = "0.1.0"
-description = "AI action firewall normalization layer"
+description = "AI Action Firewall for tool-using agents"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -10,6 +14,13 @@ dependencies = [
     "pyyaml>=6.0.3",
     "uvicorn>=0.47.0",
 ]
+
+[tool.setuptools.packages.find]
+include = ["api*"]
+
+[tool.setuptools.package-data]
+"api.engine.rules" = ["packs/**/*.yaml"]
+"api.engine.policy" = ["default.yaml"]
 
 [dependency-groups]
 dev = [

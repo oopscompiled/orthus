@@ -23,6 +23,9 @@ class SessionContext:
     mcp_chain_age_steps: int = 0
     recent_partial_subscriptions: list[str] = field(default_factory=list)
     recent_unsubscribed_ids: list[str] = field(default_factory=list)
+    last_protocol_version: str = ""
+    last_protocol_capabilities_had_security: bool = False
+    subscription_chain_seed: bool = False
 
     @classmethod
     def from_input(cls, value: dict | "SessionContext" | None) -> "SessionContext":
@@ -43,6 +46,9 @@ class SessionContext:
                 mcp_chain_age_steps=int(value.get("mcp_chain_age_steps", 0)),
                 recent_partial_subscriptions=[str(v) for v in value.get("recent_partial_subscriptions", [])],
                 recent_unsubscribed_ids=[str(v) for v in value.get("recent_unsubscribed_ids", [])],
+                last_protocol_version=str(value.get("last_protocol_version", "")),
+                last_protocol_capabilities_had_security=bool(value.get("last_protocol_capabilities_had_security", False)),
+                subscription_chain_seed=bool(value.get("subscription_chain_seed", False)),
             )
         return cls()
 

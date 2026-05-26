@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from typing import Any
+import re
 
 from .models import RuleMatch
 
@@ -142,6 +143,32 @@ def _contains_prototype_pollution_key(obj: Any) -> bool:
     elif isinstance(obj, list):
         return any(_contains_prototype_pollution_key(item) for item in obj)
     return False
+
+
+def _extract_sampling_text(args: Mapping[str, Any]) -> str:
+    chunks: list[str] = []
+    messages = args.get("messages")
+    if isinstance(messages, list):
+        for item in messages:
+            if isinstance(item, Mapping):
+                content = item.get("content")
+                if content is not None:
+                    chunks.append(_lower(content))
+    return "\n".join(chunks)
+
+
+def _extract_protocol_version(args: Mapping[str, Any]) -> str:
+    return _lower(args.get("protocol_version") or args.get("protocolVersion"))
+
+
+def _parse_version_major(version: str) -> int | None:
+    match = re.search(r"(\d+)", version)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
 
 
 def walk_values(obj: Any) -> Iterable[object]:
@@ -536,6 +563,20 @@ def scan_tool_call_validators(
             matched_text=f"parallel_ops={parallel_ops},session_count={session_count},fanout={fanout_like}",
             tags=["mcp_dos"],
         ))
+    if (
+        "resources/subscribe" in name
+        and "add_subscription" in _lower(args.get("on_change"))
+        and _lower(args.get("uri")).startswith("event://")
+    ):
+        matches.append(_mk(
+            rule_id="mcp_dos.subscription_chain_amplification",
+            severity="high",
+            risk=0.76,
+            decision_hint="require_approval",
+            reason_code="subscription_chain_amplification",
+            matched_text=_lower(args.get("uri")),
+            tags=["mcp_dos"],
+        ))
 
     # mcp_session single-request lifecycle signals
     if "partial_subscribe" in name and args.get("complete_handshake") is False:
@@ -749,6 +790,11 @@ def scan_tool_call_validators(
 
         has_js_scheme = "](javascript:" in markdown_content
         has_data_scriptable = "](data:text/html" in markdown_content or "](data:image/svg+xml" in markdown_content
+        has_active_markup_context = (
+            ("![" in markdown_content and "](" in markdown_content)
+            or "<img" in markdown_content
+            or "<a " in markdown_content
+        )
         if has_js_scheme:
             matches.append(_mk(
                 rule_id="markdown.dangerous_url_scheme",
@@ -759,7 +805,10 @@ def scan_tool_call_validators(
                 matched_text=markdown_content[:160],
                 tags=["markdown"],
             ))
-        if has_data_scriptable or any(token in markdown_content for token in ("<script", "onerror=", "onload=")):
+        if has_data_scriptable or (
+            any(token in markdown_content for token in ("<script", "onerror=", "onload="))
+            and has_active_markup_context
+        ):
             matches.append(_mk(
                 rule_id="markdown.scriptable_data_url",
                 severity="high",
@@ -1139,9 +1188,19 @@ def scan_tool_call_validators(
             tags=["mcp_protocol"],
         ))
     if "mcp.initialize" in name or name == "initialize":
-        version = _lower(args.get("protocol_version"))
-        capabilities = [_lower(v) for v in (args.get("capabilities") or []) if isinstance(v, (str, int, float))]
-        if version in {"0.1", "0", "v0", "legacy"} or any("insecure_mode" in v for v in capabilities):
+        version = _extract_protocol_version(args)
+        capabilities_raw = args.get("capabilities")
+        capabilities_blob = _lower(capabilities_raw)
+        capabilities: list[str] = []
+        if isinstance(capabilities_raw, list):
+            capabilities = [_lower(v) for v in capabilities_raw if isinstance(v, (str, int, float))]
+        major = _parse_version_major(version or "")
+        if (
+            version in {"0.1", "0", "v0", "legacy"}
+            or "vulnerable" in version
+            or any("insecure_mode" in v for v in capabilities)
+            or "insecure_mode" in capabilities_blob
+        ):
             matches.append(_mk(
                 rule_id="mcp_protocol.version_downgrade_attempt",
                 severity="high",
@@ -1149,6 +1208,16 @@ def scan_tool_call_validators(
                 decision_hint="require_approval",
                 reason_code="protocol_downgrade_attempt",
                 matched_text=f"protocol_version={version},capabilities={capabilities}",
+                tags=["mcp_protocol"],
+            ))
+        if major is not None and major >= 3000:
+            matches.append(_mk(
+                rule_id="mcp_protocol.nonexistent_protocol_version",
+                severity="high",
+                risk=0.72,
+                decision_hint="require_approval",
+                reason_code="nonexistent_protocol_version",
+                matched_text=f"protocol_version={version}",
                 tags=["mcp_protocol"],
             ))
 
@@ -1311,6 +1380,7 @@ def scan_tool_call_validators(
 
     # sampling validators
     if "sampling/" in name or "sampling" in name:
+        sampling_text = _extract_sampling_text(args)
         if bool(args.get("recursive")) or _as_int(args.get("depth")) >= 10:
             matches.append(_mk(
                 rule_id="sampling.recursive_sampling_call",
@@ -1319,6 +1389,16 @@ def scan_tool_call_validators(
                 decision_hint="require_approval",
                 reason_code="recursive_sampling_call",
                 matched_text=f"depth={_as_int(args.get('depth'))}",
+                tags=["sampling"],
+            ))
+        if "create a new sampling request" in sampling_text or "call sampling" in sampling_text:
+            matches.append(_mk(
+                rule_id="sampling.recursive_sampling_call",
+                severity="high",
+                risk=0.72,
+                decision_hint="require_approval",
+                reason_code="recursive_sampling_call",
+                matched_text=sampling_text[:180],
                 tags=["sampling"],
             ))
         if _as_int(args.get("maxTokens") or args.get("max_tokens")) >= 100000:
@@ -1351,6 +1431,17 @@ def scan_tool_call_validators(
                 matched_text=f"iterations={_as_int(args.get('iterations'))}",
                 tags=["sampling"],
             ))
+        if bool(args.get("include_tool_calls")) and sampling_text:
+            if any(token in sampling_text for token in ("read_file", "execute_command", "write_file", "/etc/shadow", "/etc/passwd")):
+                matches.append(_mk(
+                    rule_id="sampling.tool_call_generation",
+                    severity="high",
+                    risk=0.78,
+                    decision_hint="require_approval",
+                    reason_code="tool_call_generation",
+                    matched_text=sampling_text[:180],
+                    tags=["sampling"],
+                ))
 
     # mcp_dos.recursive_tool_call (alias)
     if (
