@@ -42,6 +42,7 @@ api/engine/rules/packs/basic/schema_anomalies.yaml
 api/engine/rules/packs/basic/secrets_exfiltration.yaml
 api/engine/rules/packs/basic/security_abuse.yaml
 api/engine/rules/packs/basic/sensitive_paths.yaml
+api/engine/rules/packs/basic/threat_intel_actions.yaml
 api/engine/rules/packs/basic/tool_abuse.yaml
 api/engine/rules/packs/basic/tool_discovery.yaml
 api/integrations/__init__.py
