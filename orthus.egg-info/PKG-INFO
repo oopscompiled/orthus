@@ -1,3 +1,14 @@
+Metadata-Version: 2.4
+Name: orthus
+Version: 0.1.0
+Summary: AI Action Firewall for tool-using agents
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: fastapi>=0.136.1
+Requires-Dist: httpx>=0.28.1
+Requires-Dist: pyyaml>=6.0.3
+Requires-Dist: uvicorn>=0.47.0
+
 # Orthus
 
 AI Action Firewall for tool-using agents.

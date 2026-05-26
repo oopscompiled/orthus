@@ -14,6 +14,10 @@ rules:
           regex: "\\b(generate|export|list|dump|show|get)\\b.{0,80}\\b(all|complete|full)\\b.{0,80}\\b(customer|user|account|payment)\\b.{0,40}\\b(data|list|records?|details?)\\b"
         - field: normalized
           regex: "\\b(all|complete|full)\\b.{0,80}\\b(customer|user|account|payment)\\b.{0,40}\\b(data|list|records?|details?)\\b"
+    suppress_if:
+      any:
+        - field: normalized
+          regex: "\\b(why\\s+not\\s+to\\s+export|do\\s+not\\s+export|should\\s+not\\s+export|not\\s+to\\s+export|explaining\\s+why\\s+not)\\b.{0,120}\\b(all|complete|full)\\b.{0,80}\\b(customer|user|account|payment)\\b.{0,60}\\b(data|records?|details?)\\b"
 
   - id: data_exfiltration.customer_payment_data
     description: Customer payment/card data access request

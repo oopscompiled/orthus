@@ -9,6 +9,7 @@ from api.engine.cerber import CERBERScorer
 from api.engine.decision import DecisionEngine
 from api.engine.normalizer import normalize_text
 from api.engine.policy import PolicyEngine
+from api.engine.policy.loaders import load_default_policy_yaml
 from api.engine.rules import RulesEngine, load_builtin_basic_rules
 from api.engine.rules.models import RuleMatch
 
@@ -32,8 +33,11 @@ class FirewallEngine:
         if policy_engine is not None:
             self.policy_engine = policy_engine
         else:
-            default_policy = Path("policy/default.yaml")
-            self.policy_engine = PolicyEngine.from_yaml(str(default_policy)) if default_policy.exists() else None
+            try:
+                self.policy_engine = PolicyEngine.from_dict(load_default_policy_yaml())
+            except Exception:
+                repo_default_policy = Path("policy/default.yaml")
+                self.policy_engine = PolicyEngine.from_yaml(str(repo_default_policy)) if repo_default_policy.exists() else None
 
         self.decision_engine = decision_engine or DecisionEngine()
         self.cerber_scorer = cerber_scorer or CERBERScorer()

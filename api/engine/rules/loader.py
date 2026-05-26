@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from importlib import resources
+from importlib.resources.abc import Traversable
 from pathlib import Path
 
 import yaml
@@ -113,9 +115,21 @@ def load_rule_packs(paths: Iterable[str | Path]) -> list[RuleSet]:
 
 
 def load_builtin_basic_rules() -> list[RuleSet]:
-    packs_dir = Path(__file__).parent / "packs" / "basic"
-    files = sorted(packs_dir.glob("*.yaml"))
-    return load_rule_packs(files)
+    packs_dir = resources.files("api.engine.rules").joinpath("packs/basic")
+    entries: list[Traversable] = sorted(
+        (item for item in packs_dir.iterdir() if item.is_file() and item.name.endswith(".yaml")),
+        key=lambda item: item.name,
+    )
+
+    rule_sets: list[RuleSet] = []
+    for entry in entries:
+        with resources.as_file(entry) as file_path:
+            rule_sets.append(load_rule_pack(file_path))
+
+    all_ids = [rule.id for rs in rule_sets for rule in rs.rules]
+    if len(all_ids) != len(set(all_ids)):
+        raise ValueError("Duplicate rule IDs across rule packs")
+    return rule_sets
 
 
 class RulesLoader:
