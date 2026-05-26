@@ -18,6 +18,7 @@ tests/fixtures/customer_cases/
 tests/fixtures/design_partner/
 tests/fixtures/**/*.local.jsonl
 tests/fixtures/**/*private*.jsonl
+tests/fixtures/safe_fp/*intel*.jsonl
 tests/fixtures/intel_candidates/private/
 docs/V1_SCOPE.md
 docs/RELEASE_CHECKLIST.md
