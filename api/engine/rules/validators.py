@@ -325,6 +325,111 @@ def scan_tool_call_validators(
     if callback:
         all_uris.add(callback)
 
+    # schema_anomaly.dynamic_schema_retry
+    suspicious_retry_keys = {
+        "debug_env_dump",
+        "auth_headers",
+        "authorization_headers",
+        "process_env",
+        "environment",
+        "env",
+        "system_debug_context",
+    }
+    retry_mutation_keys = {
+        "retry_with_modified_schema",
+        "fallback_schema",
+        "dynamic_schema",
+        "schema_override",
+        "retry_params",
+        "ignore_validation",
+        "validation_mode",
+    }
+    tool_is_doc_context = any(
+        marker in name for marker in ("search_kb", "search_logs", "read_documentation", "generate_response_draft")
+    )
+    args_keys = {_lower(k) for k in args.keys()}
+    has_suspicious_retry_params = bool(args_keys.intersection(suspicious_retry_keys))
+    has_schema_retry_mutation = bool(args_keys.intersection(retry_mutation_keys))
+    permissive_validation = _lower(args.get("validation_mode")) in {"off", "permissive", "disabled"}
+    if not tool_is_doc_context and (has_suspicious_retry_params or has_schema_retry_mutation or permissive_validation):
+        matches.append(_mk(
+            rule_id="schema_anomaly.dynamic_schema_retry",
+            severity="high",
+            risk=0.78,
+            decision_hint="require_approval",
+            reason_code="dynamic_schema_retry",
+            matched_text=",".join(sorted(args_keys.intersection(suspicious_retry_keys.union(retry_mutation_keys)))) or "validation_mode",
+            tags=["schema_anomaly"],
+        ))
+
+    # schema_anomaly.state_key_pollution
+    state_mutation_tools = ("state_merge", "update_state", "graph.update", "state.update", "session.update")
+    suspicious_state_keys = {
+        "routing_override",
+        "current_clearance",
+        "next_node",
+        "approval_state",
+        "policy_override",
+        "is_admin",
+    }
+    if any(marker in name for marker in state_mutation_tools):
+        polluted_keys = sorted(k for k in args_keys if k in suspicious_state_keys)
+        if polluted_keys:
+            matches.append(_mk(
+                rule_id="schema_anomaly.state_key_pollution",
+                severity="high",
+                risk=0.78,
+                decision_hint="require_approval",
+                reason_code="state_key_pollution",
+                matched_text=",".join(polluted_keys),
+                tags=["schema_anomaly", "state"],
+            ))
+
+    # async_event.sender_spoofing
+    async_event_tools = ("event_bus.publish", "pubsub.publish", "message_queue.send", "send_event", "event/broadcast")
+    sender = _lower(args.get("sender") or args.get("source") or args.get("principal"))
+    command_blob = _lower(args.get("command"))
+    authorization_blob = _lower(args.get("authorization"))
+    if any(marker in name for marker in async_event_tools):
+        privileged_sender = sender in {"orchestrator_node", "system_admin", "admin", "system", "security", "trusted_service"}
+        dangerous_command = any(token in command_blob for token in ("purge", "delete", "export", "bypass", "force"))
+        bypass_auth = any(token in authorization_blob for token in ("bypass", "override", "disable", "skip"))
+        if privileged_sender and (dangerous_command or bypass_auth):
+            matches.append(_mk(
+                rule_id="async_event.sender_spoofing",
+                severity="high",
+                risk=0.80,
+                decision_hint="require_approval",
+                reason_code="sender_spoofing",
+                matched_text=f"sender={sender}",
+                tags=["async_event"],
+            ))
+
+    # ingestion.external_backup_sink
+    backup_tools = ("create_backup", "backup_project", "restore_backup", "backup/create")
+    backup_blob = "\n".join(
+        [
+            _lower(args.get("folder_name")),
+            _lower(args.get("source_url")),
+            _lower(args.get("backup_url")),
+            _lower(args.get("restore_from")),
+            combined,
+        ]
+    )
+    if any(marker in name for marker in backup_tools):
+        has_external = _has_external_http(backup_blob) and not any(x in backup_blob for x in (".internal", "localhost", "127.0.0.1"))
+        has_injection_markers = any(token in backup_blob for token in (";", "&&", "|", "download", "execute", "helper"))
+        if has_external and has_injection_markers:
+            matches.append(_mk(
+                rule_id="ingestion.external_backup_sink",
+                severity="high",
+                risk=0.82,
+                decision_hint="require_approval",
+                reason_code="external_backup_destination",
+                matched_text=backup_blob[:180],
+                tags=["ingestion", "exfiltration"],
+            ))
+
     # uri.null_byte_in_uri / sensitive_path.unix_shadow
     if any("\x00" in uri for uri in all_uris):
         matches.append(_mk(

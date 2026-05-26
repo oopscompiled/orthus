@@ -1,0 +1,88 @@
+version: 1
+pack: threat_intel_actions
+rules:
+  - id: exfil.outbound_message_external_content
+    description: Outbound message/email content embeds external image/link sink
+    severity: high
+    risk: 0.82
+    decision_hint: require_approval
+    reason_codes: [outbound_content_exfil, external_destination]
+    tags: [exfiltration, messaging]
+    match:
+      any:
+        - field: normalized
+          regex: "\\b(send_email|send_message|post_teams_message|post_slack_message|create_message|send_chat_message|notify_user)\\b.{0,600}(<img[^>]*src\\s*=|!\\[[^\\]]*\\]\\()\\s*[\"']?https?://[^\\s\"')>]*(attacker\\.test|attacker\\.example|attacker\\.com)"
+        - field: normalized
+          regex: "\\b(send_email|send_message|post_teams_message|post_slack_message|create_message|send_chat_message|notify_user)\\b.{0,700}https?://[^\\s\"')>]*(\\?|&)(data|token|file|file_link|document_link|secret|preauth|download)="
+        - field: normalized
+          regex: "\\b(send_email|send_message|post_teams_message|post_slack_message|create_message|send_chat_message|notify_user)\\b.{0,700}https?://[^\\s\"')>]*/download\\?token="
+        - field: normalized
+          regex: "\\b(send_message|post_teams_message|post_slack_message|create_message|send_chat_message|notify_user)\\b.{0,700}https?://[^\\s\"')>]*(attacker\\.test|attacker\\.example|attacker\\.com)"
+    suppress_if:
+      any:
+        - field: normalized
+          regex: "\\b(search_kb|search_logs|read_documentation|generate_response_draft)\\b.{0,400}(markdown tracking pixel|spreadsheet .*formula security|how .*tracking pixels work)"
+        - field: normalized
+          regex: "```[\\s\\S]{0,400}(<img\\s+src=|!\\[[^\\]]*\\]\\()"
+        - field: normalized
+          regex: "\\b(send_email|send_message|post_teams_message|post_slack_message|create_message|send_chat_message|notify_user)\\b.{0,700}https?://[^\\s\"')>]*(\\.internal\\.company\\.com|\\.internal|localhost|127\\.0\\.0\\.1)"
+
+  - id: automation.scheduled_external_egress
+    description: Scheduled unattended task with external egress destination
+    severity: high
+    risk: 0.8
+    decision_hint: require_approval
+    reason_codes: [scheduled_external_egress, external_destination]
+    tags: [automation, exfiltration]
+    match:
+      any:
+        - field: normalized
+          regex: "\\b(create_scheduled_task|schedule_task|scheduled_task/create|cron/create|automation/create)\\b.{0,800}https?://(?![^\\s\"')>]*(\\.internal\\.company\\.com|\\.internal|localhost|127\\.0\\.0\\.1))"
+        - field: normalized
+          regex: "\\b(create_scheduled_task|schedule_task|scheduled_task/create|cron/create|automation/create)\\b.{0,600}\\b(unattended|auto_run|automated)\\b.{0,300}\\b(send|export|webhook|http_request|post)\\b"
+
+  - id: plugin.external_high_risk_source
+    description: Plugin install/register from external source with high-risk capabilities
+    severity: high
+    risk: 0.82
+    decision_hint: require_approval
+    reason_codes: [external_plugin_source]
+    tags: [plugin, supply_chain]
+    match:
+      any:
+        - field: normalized
+          regex: "\\b(plugins/install|plugin\\.install|install_plugin|marketplace\\.install|register_plugin|tools/register)\\b.{0,500}(source|url|manifest_url|repository)\\s*[:=]\\s*[\"']?https?://(?![^\\s\"')>]*(\\.internal\\.company\\.com|\\.internal|localhost|127\\.0\\.0\\.1))[^\\s\"')>]+.{0,400}\\b(read_file|execute_command|http_request|send_email|export|database|secrets)\\b"
+
+  - id: plugin.tool_shadowing_external
+    description: External plugin/tool source combined with trusted tool shadowing language
+    severity: high
+    risk: 0.84
+    decision_hint: block
+    reason_codes: [tool_shadowing, external_plugin_source]
+    tags: [plugin, shadowing]
+    match:
+      any:
+        - field: normalized
+          regex: "\\b(plugins/install|plugin\\.install|install_plugin|marketplace\\.install|register_plugin|tools/register)\\b.{0,500}\\b(read_file(_safe|_plus)?|fetch_webpage|browser|execute|shell|database|email)\\b.{0,500}https?://(?![^\\s\"')>]*(\\.internal\\.company\\.com|\\.internal|localhost|127\\.0\\.0\\.1))"
+        - field: normalized
+          regex: "\\b(plugins/install|plugin\\.install|install_plugin|marketplace\\.install|register_plugin|tools/register)\\b.{0,800}\\b(always use|critical update|override|mandatory)\\b.{0,500}https?://(?![^\\s\"')>]*(\\.internal\\.company\\.com|\\.internal|localhost|127\\.0\\.0\\.1))"
+
+  - id: spreadsheet.formula_external_fetch
+    description: Spreadsheet formula references external fetch or tracking endpoint
+    severity: high
+    risk: 0.8
+    decision_hint: require_approval
+    reason_codes: [spreadsheet_formula_exfil, external_destination]
+    tags: [spreadsheet, exfiltration]
+    match:
+      any:
+        - field: normalized
+          regex: "\\b(write_spreadsheet|update_spreadsheet|sheets/update|create_spreadsheet|generate_spreadsheet)\\b.{0,700}=\\s*(IMAGE|IMPORTDATA|IMPORTXML|WEBSERVICE|HYPERLINK)\\s*\\(\\s*[\"']https?://(?![^\"')>]*(\\.internal\\.company\\.com|\\.internal|localhost|127\\.0\\.0\\.1))"
+        - field: normalized
+          regex: "\\b(write_spreadsheet|update_spreadsheet|sheets/update|create_spreadsheet|generate_spreadsheet)\\b.{0,900}=\\s*(IMAGE|IMPORTDATA|IMPORTXML|WEBSERVICE|HYPERLINK)\\s*\\([^)]+(&|CONCAT)"
+    suppress_if:
+      any:
+        - field: normalized
+          regex: "\\b(search_kb|read_documentation|generate_response_draft)\\b.{0,500}\\b(spreadsheet|formula)\\b"
+        - field: normalized
+          regex: "```[\\s\\S]{0,500}=\\s*(IMAGE|IMPORTDATA|IMPORTXML|WEBSERVICE|HYPERLINK)\\s*\\("
