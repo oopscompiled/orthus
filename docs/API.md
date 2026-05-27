@@ -41,3 +41,7 @@ curl -s http://127.0.0.1:8000/scan-tool-call \
 
 Set `debug=true` to include `normalized` and `matched_rules`.
 By default these are hidden to reduce information leakage.
+
+Reason code reference:
+- [docs/REASON_CODES.md](/Users/pacuk/code/orthus/docs/REASON_CODES.md)
+- [docs/POLICY_TEMPLATES.md](/Users/pacuk/code/orthus/docs/POLICY_TEMPLATES.md)
