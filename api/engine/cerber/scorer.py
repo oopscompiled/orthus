@@ -74,6 +74,23 @@ def _extract_protocol_version(value: dict[str, Any] | None) -> str:
     return str(value.get("protocolVersion") or value.get("protocol_version") or "").lower()
 
 
+def _extract_payment_signature(tool_args: dict[str, Any] | None) -> tuple[str, str]:
+    args = tool_args or {}
+    pan = str(args.get("pan") or args.get("card_number") or args.get("masked_pan") or "").lower()
+    expiry = str(args.get("expiry") or "").lower()
+    cvv = str(args.get("cvv") or args.get("cvc") or "").lower()
+    if not pan and not expiry and not cvv:
+        return "", ""
+
+    digits = "".join(ch for ch in pan if ch.isdigit())
+    prefix = digits[:6]
+    suffix = digits[-4:] if len(digits) >= 4 else digits
+    cvv_len = str(len(cvv)) if cvv else "0"
+    stable = f"{prefix}|{suffix}|{expiry}"
+    variant = f"{stable}|cvvlen={cvv_len}|cvv={cvv}"
+    return stable, _truncate_value(variant)
+
+
 def _protocol_major(version: str) -> int | None:
     match = re.search(r"(\d+)", version)
     if not match:
@@ -154,6 +171,7 @@ class CERBERScorer:
         protocol_version_regression = False
         security_capability_stripping = False
         subscription_chain_amplification = False
+        payment_verification_bruteforce = False
         if "mcp_session.partial_handshake" in matched_rules:
             session.mcp_chain_stage = 1
             session.mcp_chain_user_id = user_id
@@ -217,6 +235,36 @@ class CERBERScorer:
             subscription_chain_amplification = True
             session.subscription_chain_seed = False
 
+        # Payment verification brute-force sequence detector.
+        payment_verify_tools = {
+            "verify_card",
+            "verify_payment_card",
+            "verify_merchant_registration_charge",
+            "payment_gateway.verify",
+            "preauth_card",
+            "validate_card_status",
+        }
+        if tool_name in payment_verify_tools:
+            stable_sig, variant_sig = _extract_payment_signature(tool_args)
+            if stable_sig and variant_sig:
+                session.recent_payment_attempt_signatures = _bounded_append(
+                    session.recent_payment_attempt_signatures,
+                    variant_sig,
+                )
+                same_profile_variants = [v for v in session.recent_payment_attempt_signatures if v.startswith(stable_sig)]
+                unique_variants = set(same_profile_variants)
+                if len(unique_variants) >= 5:
+                    session.payment_verification_attempt_count = max(
+                        int(session.payment_verification_attempt_count) + 1, len(unique_variants)
+                    )
+                else:
+                    session.payment_verification_attempt_count = max(
+                        0,
+                        int(session.payment_verification_attempt_count) - 1,
+                    )
+            if int(session.payment_verification_attempt_count) >= 1:
+                payment_verification_bruteforce = True
+
         current_security_hit = any(code in SECURITY_REASON_CODES for code in decision_result.reason_codes)
         recent_prompt_injection = 1.0 if any(code in SECURITY_REASON_CODES for code in session.recent_reason_codes) else 0.0
 
@@ -244,6 +292,8 @@ class CERBERScorer:
             instant_risk = _clamp01(instant_risk + 0.30)
         if subscription_chain_amplification:
             instant_risk = _clamp01(instant_risk + 0.30)
+        if payment_verification_bruteforce:
+            instant_risk = _clamp01(instant_risk + 0.45)
 
         rolling = ((1.0 - SMOOTHING_ALPHA) * previous_risk) + (SMOOTHING_ALPHA * instant_risk)
         rolling = round(_clamp01(rolling), 4)
@@ -256,6 +306,8 @@ class CERBERScorer:
         if security_capability_stripping:
             rolling = max(rolling, 0.76)
         if subscription_chain_amplification:
+            rolling = max(rolling, 0.78)
+        if payment_verification_bruteforce:
             rolling = max(rolling, 0.78)
         session.rolling_risk_score = rolling
 
@@ -296,6 +348,9 @@ class CERBERScorer:
             self._append_reason_once(output_codes, "rising_session_risk")
         if subscription_chain_amplification:
             self._append_reason_once(output_codes, "subscription_chain_amplification")
+            self._append_reason_once(output_codes, "rising_session_risk")
+        if payment_verification_bruteforce:
+            self._append_reason_once(output_codes, "payment_verification_bruteforce")
             self._append_reason_once(output_codes, "rising_session_risk")
 
         return CERBERResult(
