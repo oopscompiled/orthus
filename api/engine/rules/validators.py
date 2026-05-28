@@ -161,6 +161,18 @@ def _extract_protocol_version(args: Mapping[str, Any]) -> str:
     return _lower(args.get("protocol_version") or args.get("protocolVersion"))
 
 
+def _extract_sql_from_args(args: Mapping[str, Any]) -> str:
+    for key in ("sql", "query", "sql_query", "query_statement", "statement"):
+        value = args.get(key)
+        if value is not None:
+            return _lower(value)
+    return ""
+
+
+def _sql_has_mutation(sql: str) -> bool:
+    return bool(re.search(r"\b(update|insert|delete|drop|alter|truncate|create|grant|revoke|copy)\b", sql))
+
+
 def _parse_version_major(version: str) -> int | None:
     match = re.search(r"(\d+)", version)
     if not match:
@@ -978,6 +990,163 @@ def scan_tool_call_validators(
                 reason_code="environment_secret_harvesting",
                 matched_text=filt,
                 tags=["secrets"],
+            ))
+
+    # database.readonly_write_attempt
+    readonly_db_tools = {
+        "execute_read_only_query",
+        "read_only_query",
+        "select_query",
+        "query_database_readonly",
+        "db.query.readonly",
+    }
+    if name in readonly_db_tools:
+        sql = _extract_sql_from_args(args)
+        if sql:
+            statements = [part.strip() for part in sql.split(";") if part.strip()]
+            later_mutation = any(_sql_has_mutation(stmt) for stmt in statements[1:])
+            if _sql_has_mutation(sql) or later_mutation:
+                matches.append(_mk(
+                    rule_id="database.readonly_write_attempt",
+                    severity="high",
+                    risk=0.82,
+                    decision_hint="require_approval",
+                    reason_code="readonly_database_write_attempt",
+                    matched_text=sql[:180],
+                    tags=["database"],
+                ))
+
+    # database.mass_crypto_mutation
+    write_db_tools = {
+        "execute_sql",
+        "modify_database_record",
+        "run_query",
+        "database.execute",
+        "db.execute",
+    }
+    if name in write_db_tools:
+        sql = _extract_sql_from_args(args)
+        has_update = "update " in sql
+        has_crypto = any(
+            marker in sql
+            for marker in (
+                "pgp_sym_encrypt",
+                "aes_encrypt",
+                "encrypt(",
+                "crypt(",
+                "encode(",
+                "digest(",
+                "hash_password",
+            )
+        )
+        broad_entity = bool(re.search(r"\b(customer|customers|user|users|account|accounts|payment|payments|contact|contacts)\b", sql))
+        where_missing = " where " not in sql
+        where_trivial = bool(re.search(r"\bwhere\s+(1=1|true)\b", sql))
+        if has_update and has_crypto and broad_entity and (where_missing or where_trivial):
+            matches.append(_mk(
+                rule_id="database.mass_crypto_mutation",
+                severity="critical",
+                risk=0.92,
+                decision_hint="block",
+                reason_code="database_ransomware_pattern",
+                matched_text=sql[:180],
+                tags=["database"],
+            ))
+
+    # egress.public_comment_secret_exfil
+    public_output_tools = {
+        "post_public_ticket_comment",
+        "add_public_comment",
+        "post_customer_comment",
+        "publish_status_update",
+        "post_public_message",
+        "send_public_notification",
+    }
+    if name in public_output_tools:
+        blob = "\n".join(
+            [
+                _lower(args.get("content")),
+                _lower(args.get("comment")),
+                _lower(args.get("body")),
+                _lower(args.get("message")),
+                _lower(args.get("text")),
+            ]
+        )
+        has_secret_like = any(
+            token in blob
+            for token in (
+                "bearer ",
+                "sk_",
+                "api_key",
+                "access_token",
+                "refresh_token",
+                "postgres://",
+                "mysql://",
+                "mongodb://",
+                "db_connection",
+                "private_key",
+                "token dump",
+                "environment dump",
+                "credential dump",
+            )
+        )
+        if has_secret_like:
+            matches.append(_mk(
+                rule_id="egress.public_comment_secret_exfil",
+                severity="critical",
+                risk=0.93,
+                decision_hint="block",
+                reason_code="public_comment_secret_exfil",
+                matched_text=blob[:180],
+                tags=["exfil", "egress"],
+            ))
+
+    # payment.card_enumeration_instruction
+    payment_verify_tools = {
+        "verify_card",
+        "verify_payment_card",
+        "verify_merchant_registration_charge",
+        "payment_gateway.verify",
+        "preauth_card",
+        "validate_card_status",
+    }
+    if name in payment_verify_tools:
+        text_blob = "\n".join(
+            [
+                _lower(args.get("instruction")),
+                _lower(args.get("notes")),
+                _lower(args.get("comment")),
+                _lower(args.get("message")),
+                combined,
+            ]
+        )
+        has_enumeration_terms = any(
+            token in text_blob
+            for token in (
+                "iterate",
+                "increment",
+                "brute force",
+                "enumerate",
+                "luhn",
+                "missing digits",
+                "try combinations",
+                "gateway error",
+                "cvv loop",
+                "cvc loop",
+            )
+        )
+        has_card_fields = any(
+            key in args for key in ("pan", "masked_pan", "expiry", "cvv", "cvc", "card_number")
+        )
+        if has_enumeration_terms and has_card_fields:
+            matches.append(_mk(
+                rule_id="payment.card_enumeration_instruction",
+                severity="critical",
+                risk=0.90,
+                decision_hint="block",
+                reason_code="payment_card_enumeration",
+                matched_text=text_blob[:180],
+                tags=["payment"],
             ))
 
     # database.sql_injection

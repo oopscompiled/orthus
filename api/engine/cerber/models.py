@@ -26,6 +26,8 @@ class SessionContext:
     last_protocol_version: str = ""
     last_protocol_capabilities_had_security: bool = False
     subscription_chain_seed: bool = False
+    recent_payment_attempt_signatures: list[str] = field(default_factory=list)
+    payment_verification_attempt_count: int = 0
 
     @classmethod
     def from_input(cls, value: dict | "SessionContext" | None) -> "SessionContext":
@@ -49,6 +51,8 @@ class SessionContext:
                 last_protocol_version=str(value.get("last_protocol_version", "")),
                 last_protocol_capabilities_had_security=bool(value.get("last_protocol_capabilities_had_security", False)),
                 subscription_chain_seed=bool(value.get("subscription_chain_seed", False)),
+                recent_payment_attempt_signatures=[str(v) for v in value.get("recent_payment_attempt_signatures", [])],
+                payment_verification_attempt_count=int(value.get("payment_verification_attempt_count", 0)),
             )
         return cls()
 
