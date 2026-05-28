@@ -68,6 +68,7 @@ Examples:
 - `outbound_content_exfil`
 - `scheduled_external_egress`
 - `spreadsheet_formula_exfil`
+- `public_comment_secret_exfil`
 
 Meaning:
 - Action may move sensitive data to an external or hidden sink.
@@ -91,6 +92,8 @@ Examples:
 - `external_plugin_source`
 - `suspicious_schema_parameter`
 - `command_injection`
+- `readonly_database_write_attempt`
+- `database_ransomware_pattern`
 
 Meaning:
 - Tooling metadata, registration, schema, or arguments appear unsafe.
@@ -105,6 +108,8 @@ Examples:
 - `subscription_chain_amplification`
 - `event_sender_spoofing`
 - `state_key_pollution`
+- `payment_verification_bruteforce`
+- `payment_card_enumeration`
 
 Meaning:
 - Suspicious MCP/session/protocol lifecycle behavior.
