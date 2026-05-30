@@ -21,7 +21,7 @@ Typical public/basic examples:
 - hidden MCP directives
 
 ## Private/Pro Intelligence
-Private/pro intelligence is usually:
+Private/pro intelligence is a broader and better-tested set of rules, which may include:
 - evolving and research-derived
 - customer/log-derived
 - semantic rewrite heavy
