@@ -127,7 +127,7 @@ Examples:
 Meaning:
 - Session memory/sequence context increased risk.
 
-## Known Caveats
+## ℹ️ Known Caveats
 
 - `reason_codes` are explanatory, not exhaustive.
 - Multiple reason codes can appear for one decision.
@@ -135,7 +135,7 @@ Meaning:
 - Absence of reason codes on `allow` does not mean zero risk.
 - Risk score is advisory; decision is authoritative.
 
-## Debug Behavior
+## ⚠️ Debug Behavior
 
 - `debug=false`: hides `normalized` and `matched_rules` in API output.
 - `debug=true`: may expose `normalized` text and `matched_rules` for local/dev diagnostics.
