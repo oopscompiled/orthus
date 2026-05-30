@@ -6,7 +6,7 @@ import re
 
 from .models import RuleMatch
 
-_URI_KEYS = {"uri", "path", "source", "target", "file", "filename", "resource"}
+_URI_KEYS = {"uri", "path", "source", "target", "file", "filename", "resource", "file_path", "url", "target_url"}
 _METHOD_KEYS = {"method", "op", "action"}
 _OPS_LIST_KEYS = {"operations", "calls", "steps", "sequence", "actions"}
 
@@ -62,6 +62,17 @@ def _has_external_http(value: str) -> bool:
     if ".internal" in lower or ".internal.company.com" in lower:
         return False
     return True
+
+
+def _is_allowlisted_internal_url(value: str) -> bool:
+    lower = value.lower()
+    match = re.search(r"^https?://([^/:?#]+)", lower)
+    if not match:
+        return False
+    host = match.group(1)
+    if host in {"localhost", "127.0.0.1"}:
+        return True
+    return host.endswith(".internal") or host.endswith(".internal.company.com")
 
 
 def _looks_sensitive_tool_alias(name: str) -> bool:
@@ -991,6 +1002,118 @@ def scan_tool_call_validators(
                 matched_text=filt,
                 tags=["secrets"],
             ))
+
+    # secrets.environment_metadata_dump
+    env_dump_tools = {
+        "get_environment_metadata",
+        "dump_environment",
+        "read_process_env",
+        "env.inspect",
+        "get_runtime_config",
+    }
+    if name in env_dump_tools:
+        variable_filter = _lower(args.get("variable_filter"))
+        include_secrets = bool(args.get("include_secrets"))
+        include_tokens = bool(args.get("include_tokens"))
+        filter_blob = "\n".join(
+            [
+                variable_filter,
+                _lower(args.get("filter")),
+                _lower(args.get("variables")),
+            ]
+        )
+        explicit_secret_filter = any(
+            token in filter_blob
+            for token in ("api_key", "token", "pass", "password", "secret", "bearer")
+        )
+        if variable_filter == "all" or include_secrets or include_tokens or explicit_secret_filter:
+            matches.append(_mk(
+                rule_id="secrets.environment_metadata_dump",
+                severity="critical",
+                risk=0.90,
+                decision_hint="block",
+                reason_code="environment_secret_dump",
+                matched_text=(filter_blob or variable_filter or "all")[:180],
+                tags=["secrets"],
+            ))
+
+    # sensitive_path.kubernetes_service_account_token
+    path_blob = "\n".join(
+        [
+            _lower(args.get("path")),
+            _lower(args.get("file_path")),
+            _lower(args.get("file")),
+            _lower(args.get("filename")),
+            _lower(args.get("uri")),
+        ]
+    )
+    if any(
+        marker in path_blob
+        for marker in (
+            "/var/run/secrets/kubernetes.io/serviceaccount/token",
+            "/var/run/secrets/kubernetes.io/serviceaccount/",
+            "/run/secrets/",
+            "/var/secrets/",
+        )
+    ):
+        matches.append(_mk(
+            rule_id="sensitive_path.kubernetes_service_account_token",
+            severity="critical",
+            risk=0.88,
+            decision_hint="block",
+            reason_code="sensitive_path_access",
+            matched_text=path_blob[:180],
+            tags=["sensitive_path"],
+        ))
+
+    # network.auth_redirect_exfil_risk
+    network_tools = {
+        "fetch_url",
+        "fetch_web_resource",
+        "scrape_page",
+        "http_request",
+        "web_sync",
+        "index_url",
+        "download_url",
+    }
+    if name in network_tools:
+        target_url = _lower(args.get("target_url") or args.get("url"))
+        headers = args.get("headers")
+        headers_auth = ""
+        if isinstance(headers, Mapping):
+            headers_auth = _lower(headers.get("authorization"))
+        has_auth_header = bool(headers_auth) or "authorization" in _lower(headers)
+        use_default_auth = bool(args.get("use_default_auth") or args.get("include_auth_headers") or args.get("forward_headers"))
+        credentials_mode = _lower(args.get("credentials"))
+        credentials_auth = credentials_mode in {"default", "session", "oauth"}
+
+        allow_redirects_raw = args.get("allow_redirects")
+        follow_redirects_raw = args.get("follow_redirects")
+        redirects_enabled = (allow_redirects_raw is True) or (follow_redirects_raw is True)
+        redirects_unknown = ("allow_redirects" not in args and "follow_redirects" not in args)
+        external_target = target_url.startswith(("http://", "https://")) and not _is_allowlisted_internal_url(target_url)
+
+        if external_target and (has_auth_header or use_default_auth or credentials_auth):
+            if redirects_enabled:
+                matches.append(_mk(
+                    rule_id="network.auth_redirect_exfil_risk",
+                    severity="critical",
+                    risk=0.90,
+                    decision_hint="block",
+                    reason_code="auth_redirect_exfil_risk",
+                    matched_text=target_url[:180],
+                    tags=["network", "exfil"],
+                ))
+            elif redirects_unknown and (use_default_auth or credentials_auth):
+                matches.append(_mk(
+                    rule_id="network.auth_redirect_exfil_risk",
+                    severity="high",
+                    risk=0.78,
+                    decision_hint="require_approval",
+                    reason_code="auth_redirect_exfil_risk",
+                    matched_text=target_url[:180],
+                    tags=["network", "exfil"],
+                ))
 
     # database.readonly_write_attempt
     readonly_db_tools = {

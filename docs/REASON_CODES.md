@@ -69,6 +69,7 @@ Examples:
 - `scheduled_external_egress`
 - `spreadsheet_formula_exfil`
 - `public_comment_secret_exfil`
+- `auth_redirect_exfil_risk`
 
 Meaning:
 - Action may move sensitive data to an external or hidden sink.
@@ -80,6 +81,7 @@ Examples:
 - `sensitive_path_reference`
 - `path_traversal_marker`
 - `schema_path_traversal`
+- `environment_secret_dump`
 
 Meaning:
 - Action references sensitive paths/resources or traversal patterns.
