@@ -75,11 +75,13 @@ else:
 - not a hosted SaaS in v0.1.0
 - not ML/classifier-based in V1
 
-## Demos
+## Integrations And Demos
 
+- GitHub Copilot SDK pre-tool-use hook: [docs/integrations/github_copilot_sdk.md](docs/integrations/github_copilot_sdk.md)
 - Support Copilot: `uv run python examples/support_copilot/demo.py`
 - Claude Agent SDK-style guard: `uv run python examples/claude_agent_sdk_guard/demo.py`
 - MCP server guard: `uv run python examples/mcp_server_guard/demo.py`
+- GitHub Copilot SDK guard dry-run: `uv run python examples/github_copilot_sdk_guard/demo.py`
 
 ## Docs
 
