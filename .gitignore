@@ -25,3 +25,4 @@ docs/reports/
 docs/development.md
 docs/releases
 agent/
+.uv-cache
