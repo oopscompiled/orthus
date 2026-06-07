@@ -8,10 +8,10 @@
 
 ## Reporting a Vulnerability
 
-**Email:** security@orthus.dev  
+**Email:** heleveins@gmail.com
 **Response SLA:** 48 hours acknowledgement, 7 days triage
 
-Please do not open public GitHub issues for security vulnerabilities.
+Please **do not** open public GitHub issues for security vulnerabilities.
 
 ## Scope
 
