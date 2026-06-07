@@ -88,6 +88,3 @@ else:
 - [API](docs/API.md)
 - [Reason Codes](docs/REASON_CODES.md)
 - [Policy Templates](docs/POLICY_TEMPLATES.md)
-- [V1 Scope](docs/V1_SCOPE.md)
-- [Release Checklist](docs/RELEASE_CHECKLIST.md)
-- [Development](docs/development.md)
