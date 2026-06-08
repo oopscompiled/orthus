@@ -1,13 +1,22 @@
-[build-system]
-requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.build_meta"
-
 [project]
 name = "orthus"
 version = "0.1.0"
 description = "AI Action Firewall for tool-using agents"
 readme = "README.md"
 requires-python = ">=3.11"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "oopscompiled"}
+]
+keywords = ["ai-security", "agent-security", "mcp", "prompt-injection", "tool-calling", "firewall"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Security",
+]
 dependencies = [
     "fastapi>=0.136.1",
     "httpx>=0.28.1",
@@ -15,23 +24,6 @@ dependencies = [
     "uvicorn>=0.47.0",
 ]
 
-[tool.setuptools.packages.find]
-include = ["api*"]
-
-[tool.setuptools.package-data]
-"api.engine.rules" = ["packs/**/*.yaml"]
-"api.engine.policy" = ["default.yaml"]
-
-[dependency-groups]
-dev = [
-  "pytest>=8.3.0",
-  "pytest-benchmark>=5.1.0",
-]
-
-[tool.pytest.ini_options]
-pythonpath = ["."]
-testpaths = ["tests"]
-addopts = "-q"
-markers = [
-  "benchmark: performance-oriented benchmark tests",
-]
+[project.urls]
+Homepage = "https://orthus.dev"
+Repository = "https://github.com/oopscompiled/orthus"
