@@ -1,0 +1,123 @@
+name: Integration feedback
+about: Share feedback from trying Orthus in an agent, tool-calling, MCP, or backend workflow
+labels: ["integration-feedback", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for trying Orthus.
+
+        This template is for feedback on API shape, integration friction, policy design, reason codes, examples, and developer experience.
+        Please do **not** include real secrets, private customer data, production logs, or credentials.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What did you try, and what feedback do you have?
+      placeholder: "Example: I wrapped a support-agent refund tool and found the decision contract useful, but policy setup was unclear."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: integration_type
+    attributes:
+      label: Integration type
+      options:
+        - Python API
+        - HTTP API / FastAPI server
+        - Support copilot
+        - Claude Agent SDK-style guard
+        - GitHub Copilot SDK pre-tool-use guard
+        - MCP server guard
+        - LangChain / LlamaIndex / custom agent
+        - Backend action validation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Your workflow
+      description: What kind of agent or action flow are you protecting?
+      placeholder: |
+        Example:
+        - support copilot with search_tickets, refund_payment, send_email
+        - internal developer agent with read_file, write_file, execute_command
+        - MCP server exposing resources/read and tools/register
+    validations:
+      required: true
+
+  - type: dropdown
+    id: outcome
+    attributes:
+      label: Overall outcome
+      options:
+        - Worked well
+        - Mostly worked, but docs/examples were unclear
+        - Integration was too hard
+        - Decisions/reason codes were confusing
+        - Too many false positives
+        - Missed important risky actions
+        - I could not get it running
+    validations:
+      required: true
+
+  - type: textarea
+    id: friction
+    attributes:
+      label: Integration friction
+      description: What was annoying, unclear, or missing?
+      placeholder: "Example: I did not know whether to call scan_tool_call or validate_action."
+    validations:
+      required: false
+
+  - type: textarea
+    id: helpful
+    attributes:
+      label: What was useful?
+      description: What should stay or be expanded?
+      placeholder: "Example: reason_codes helped explain why a refund required approval."
+    validations:
+      required: false
+
+  - type: textarea
+    id: desired_actions
+    attributes:
+      label: Actions you want Orthus to guard
+      description: Which tool calls or backend actions matter most in your workflow?
+      placeholder: |
+        - export_customer_data
+        - refund_payment
+        - execute_command
+        - tools/register
+        - resources/subscribe
+        - send_email
+    validations:
+      required: false
+
+  - type: textarea
+    id: policy_feedback
+    attributes:
+      label: Policy / decision feedback
+      description: Were allow, log_only, require_approval, and block mapped correctly for your use case?
+      placeholder: "Example: We would prefer require_approval instead of block for external emails."
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: Orthus version / commit
+      placeholder: "v0.1.4 or commit SHA"
+    validations:
+      required: false
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional notes
+      description: Anything else we should know?
+    validations:
+      required: false

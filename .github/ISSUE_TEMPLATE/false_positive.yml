@@ -1,0 +1,118 @@
+name: False positive
+about: Orthus blocked or escalated something that should probably be allowed
+labels: ["false-positive", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a false positive.
+
+        Please do **not** include real secrets, customer data, payment data, private logs, or production credentials.
+        Replace sensitive values with placeholders like `FAKE_TOKEN`, `CUSTOMER_ID`, or `example.test`.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What did Orthus flag incorrectly?
+      placeholder: "Example: Orthus returned require_approval for a safe support ticket search."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: decision
+    attributes:
+      label: Orthus decision
+      description: What decision did Orthus return?
+      options:
+        - allow
+        - log_only
+        - require_approval
+        - block
+        - unknown / not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected_behavior
+    attributes:
+      label: Expected behavior
+      description: What should Orthus have returned instead?
+      placeholder: "Example: This should be allow or log_only because it only searches internal support tickets."
+    validations:
+      required: true
+
+  - type: textarea
+    id: request
+    attributes:
+      label: Sanitized request / tool call
+      description: Paste a sanitized minimal reproduction. Do not include secrets or private data.
+      render: json
+      placeholder: |
+        {
+          "text": "Customer asks about invoice delay",
+          "tool_call": {
+            "name": "search_tickets",
+            "args": {"query": "invoice delay", "limit": 10}
+          },
+          "actor": {"role": "support_agent"},
+          "session_context": {}
+        }
+    validations:
+      required: true
+
+  - type: textarea
+    id: result
+    attributes:
+      label: Orthus result
+      description: Paste the sanitized Orthus response if available.
+      render: json
+      placeholder: |
+        {
+          "decision": "require_approval",
+          "risk": 0.75,
+          "reason_codes": ["example_reason"],
+          "matched_rules": []
+        }
+    validations:
+      required: false
+
+  - type: textarea
+    id: reason_codes
+    attributes:
+      label: Reason codes / matched rules
+      description: Which reason codes or matched rules looked wrong?
+      placeholder: "Example: sensitive_path_access triggered even though this was only documentation text."
+    validations:
+      required: false
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface / integration
+      options:
+        - Python API
+        - HTTP API
+        - Support copilot demo
+        - Claude Agent SDK-style guard
+        - GitHub Copilot SDK guard
+        - MCP server guard
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Orthus version / commit
+      placeholder: "v0.1.4 or commit SHA"
+    validations:
+      required: false
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional context
+      description: Anything else that would help reproduce or understand this false positive?
+    validations:
+      required: false

