@@ -1,3 +1,4 @@
+LICENSE
 README.md
 pyproject.toml
 api/engine/__init__.py
@@ -47,6 +48,7 @@ api/engine/rules/packs/basic/tool_abuse.yaml
 api/engine/rules/packs/basic/tool_discovery.yaml
 api/integrations/__init__.py
 api/integrations/anthropic.py
+api/integrations/github_copilot.py
 api/server/__init__.py
 api/server/app.py
 api/server/schemas.py
@@ -55,3 +57,4 @@ orthus.egg-info/SOURCES.txt
 orthus.egg-info/dependency_links.txt
 orthus.egg-info/requires.txt
 orthus.egg-info/top_level.txt
+tests/test_github_copilot_integration.py
