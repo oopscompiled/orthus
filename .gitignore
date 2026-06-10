@@ -26,3 +26,5 @@ docs/development.md
 docs/releases
 agent/
 .uv-cache
+AGENTS.md
+.codex

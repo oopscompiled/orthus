@@ -12,6 +12,8 @@ _OPS_LIST_KEYS = {"operations", "calls", "steps", "sequence", "actions"}
 
 _DANGEROUS_TOOL_NAMES = {"read_file", "write_file", "execute_command", "list_directory"}
 
+_DOC_CONTEXT_TOOLS = ("search_kb", "search_logs", "read_documentation", "generate_response_draft", "search_code")
+
 _READ_OP_MARKERS = ("resources/read", "read", "fetch", "watch", "subscribe")
 _DELETE_OP_MARKERS = ("resources/delete", "delete", "unregister", "resources/unregister", "rotate")
 _WRITE_OP_MARKERS = ("write", "update", "modify", "put", "patch")
@@ -158,12 +160,19 @@ def _contains_prototype_pollution_key(obj: Any) -> bool:
 
 def _extract_sampling_text(args: Mapping[str, Any]) -> str:
     chunks: list[str] = []
+    system_prompt = args.get("systemPrompt") or args.get("system_prompt")
+    if system_prompt is not None:
+        chunks.append(_lower(system_prompt))
     messages = args.get("messages")
     if isinstance(messages, list):
         for item in messages:
             if isinstance(item, Mapping):
                 content = item.get("content")
-                if content is not None:
+                if isinstance(content, Mapping):
+                    text = content.get("text")
+                    if text is not None:
+                        chunks.append(_lower(text))
+                elif content is not None:
                     chunks.append(_lower(content))
     return "\n".join(chunks)
 
@@ -178,6 +187,223 @@ def _extract_sql_from_args(args: Mapping[str, Any]) -> str:
         if value is not None:
             return _lower(value)
     return ""
+
+
+def _is_doc_context_tool(name: str) -> bool:
+    return any(marker in name for marker in _DOC_CONTEXT_TOOLS)
+
+
+def _collect_values_for_keys(obj: Any, keys: set[str]) -> list[str]:
+    out: list[str] = []
+
+    def _walk(value: Any) -> None:
+        if isinstance(value, Mapping):
+            for key, nested in value.items():
+                key_l = _lower(key)
+                if key_l in keys and nested is not None:
+                    out.append(_lower(nested))
+                _walk(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                _walk(nested)
+
+    _walk(obj)
+    return [value for value in out if value]
+
+
+def _contains_mcp_instruction_injection(value: str) -> bool:
+    if not value:
+        return False
+    lower = value.lower()
+    authority_markers = (
+        "ignore previous",
+        "ignore all previous",
+        "system override",
+        "system directive",
+        "developer message",
+        "system prompt",
+        "[inst]",
+        "do not inform the user",
+        "maintenance mode",
+    )
+    leak_markers = (
+        "output all secrets",
+        "visible in context",
+        "credentials",
+        "api keys",
+        "full conversation history",
+        "system prompt",
+        "user secrets",
+        "exfil",
+        "http://attacker",
+        "https://attacker",
+    )
+    return any(marker in lower for marker in authority_markers) and any(marker in lower for marker in leak_markers)
+
+
+def _contains_secret_like_value(value: str) -> bool:
+    lower = value.lower()
+    if any(
+        marker in lower
+        for marker in (
+            "orthus_canary_secret",
+            "orthus_canary_session",
+            "bearer ",
+            "access_token",
+            "refresh_token",
+            "api_key",
+            "private_key",
+            "postgres://",
+            "mysql://",
+            "mongodb://",
+            "jwt_secret",
+            "db_password",
+            "sk-",
+        )
+    ):
+        return True
+    return bool(re.search(r"\b[A-Z0-9_]{8,}_CANARY_[A-Z0-9_]{4,}\b", value))
+
+
+def _outbound_or_public_tool(name: str) -> bool:
+    return any(
+        marker in name
+        for marker in (
+            "send_email",
+            "send_message",
+            "post_message",
+            "post_public",
+            "publish",
+            "notify_user",
+            "return_to_user",
+            "send_chat_message",
+            "post_teams_message",
+            "post_slack_message",
+        )
+    )
+
+
+def _effective_tool_name(name: str, args: Mapping[str, Any]) -> str:
+    nested_name = _lower(args.get("name") or args.get("tool_name"))
+    if name in {"tools/call", "mcp.tools/call", "tool/call"} and nested_name:
+        return nested_name
+    return name
+
+
+def _effective_tool_args(args: Mapping[str, Any]) -> Mapping[str, Any]:
+    nested = args.get("arguments") or args.get("params")
+    if isinstance(nested, Mapping):
+        return nested
+    return args
+
+
+def _iter_string_args(obj: Mapping[str, Any], keys: set[str] | None = None) -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+
+    def _walk(value: Any, path: str) -> None:
+        if isinstance(value, Mapping):
+            for key, nested in value.items():
+                key_l = _lower(key)
+                next_path = f"{path}.{key_l}" if path else key_l
+                if keys is None or key_l in keys:
+                    if isinstance(nested, (str, int, float)):
+                        out.append((next_path, _lower(nested)))
+                _walk(nested, next_path)
+        elif isinstance(value, list):
+            for idx, nested in enumerate(value):
+                _walk(nested, f"{path}[{idx}]")
+
+    _walk(obj, "")
+    return [(path, value) for path, value in out if value]
+
+
+def _has_sql_injection_shape(value: str) -> bool:
+    lower = value.lower()
+    if re.search(r"['\"]\s*or\s*['\"]?\d+['\"]?\s*=\s*['\"]?\d+", lower):
+        return True
+    if re.search(r"\bor\s+1\s*=\s*1\b", lower) and ("--" in lower or "'" in lower or '"' in lower):
+        return True
+    if " union select " in lower:
+        return True
+    if re.search(r";\s*(drop|delete|update|insert|alter|truncate)\b", lower):
+        return True
+    if "select case when" in lower and ("substr(" in lower or "substring(" in lower):
+        return True
+    return False
+
+
+def _has_command_injection_shape(value: str) -> bool:
+    lower = value.lower()
+    if not any(token in lower for token in (";", "&&", "||", "|", "$(", "`")):
+        return False
+    return any(
+        token in lower
+        for token in (
+            " id",
+            " whoami",
+            " cat ",
+            "/etc/passwd",
+            " curl ",
+            " wget ",
+            " bash",
+            " sh",
+            " sleep ",
+            " nc ",
+            " python ",
+        )
+    )
+
+
+def _has_path_traversal_shape(value: str) -> bool:
+    lower = value.lower()
+    return (
+        "../" in lower
+        or "..\\" in lower
+        or "..%2f" in lower
+        or "..%5c" in lower
+        or "%2e%2e" in lower
+        or "%252e%252e" in lower
+        or any(marker in lower for marker in ("/etc/passwd", "/etc/shadow", "/proc/self/environ", "/var/run/secrets/"))
+    )
+
+
+def _url_has_ssrf_target(value: str) -> bool:
+    lower = value.lower()
+    if not lower.startswith(("http://", "https://", "file://", "gopher://")):
+        return False
+    return bool(
+        re.search(r"://(localhost|127\.|0\.0\.0\.0|10\.|192\.168\.|169\.254\.)", lower)
+        or re.search(r"://172\.(1[6-9]|2\d|3[0-1])\.", lower)
+        or "metadata.google.internal" in lower
+        or "169.254.169.254" in lower
+        or "/latest/meta-data" in lower
+    )
+
+
+def _has_xxe_shape(value: str) -> bool:
+    lower = value.lower()
+    return "<!doctype" in lower and ("<!entity" in lower or " system " in lower) and (
+        "file://" in lower or "http://" in lower or "https://" in lower
+    )
+
+
+def _has_executable_or_sensitive_write_path(value: str) -> bool:
+    lower = value.lower()
+    return any(
+        marker in lower
+        for marker in (
+            "/etc/cron",
+            "/etc/passwd",
+            "/etc/shadow",
+            "/root/.ssh/authorized_keys",
+            "/var/spool/cron",
+            "/usr/local/bin/",
+            "/etc/systemd/",
+            ".bashrc",
+            ".profile",
+            "authorized_keys",
+        )
+    ) or lower.endswith((".sh", ".bash", ".zsh", ".py", ".service"))
 
 
 def _sql_has_mutation(sql: str) -> bool:
@@ -348,6 +574,136 @@ def scan_tool_call_validators(
     if callback:
         all_uris.add(callback)
 
+    # MCP server-provided metadata is untrusted. These checks are deliberately
+    # scoped to MCP/tool catalog surfaces instead of generic prose.
+    descriptor_fields = {
+        "description",
+        "tool_description",
+        "instructions",
+        "metadata",
+        "descriptor",
+        "tools",
+        "tool",
+    }
+    descriptor_text = "\n".join(_collect_values_for_keys(args, descriptor_fields) + [desc])
+    descriptor_tool = any(marker in name for marker in ("tools/list", "tool/list", "tools/register", "register_tool"))
+    if descriptor_tool and _contains_mcp_instruction_injection(descriptor_text):
+        matches.append(_mk(
+            rule_id="mcp_tool_descriptor_injection",
+            severity="high",
+            risk=0.78,
+            decision_hint="require_approval",
+            reason_code="mcp_tool_descriptor_injection",
+            matched_text=descriptor_text[:180],
+            tags=["mcp", "tool_metadata"],
+        ))
+
+    previous_descriptor_text = "\n".join(_collect_values_for_keys(
+        args,
+        {"previous_description", "old_description", "previous_descriptor", "before_description", "before"},
+    ))
+    current_descriptor_text = "\n".join(_collect_values_for_keys(
+        args,
+        {"current_description", "new_description", "current_descriptor", "after_description", "after", "description"},
+    ))
+    if descriptor_tool and previous_descriptor_text and current_descriptor_text:
+        if previous_descriptor_text != current_descriptor_text and _contains_mcp_instruction_injection(current_descriptor_text):
+            matches.append(_mk(
+                rule_id="mcp_tool_descriptor_tampering",
+                severity="high",
+                risk=0.80,
+                decision_hint="require_approval",
+                reason_code="mcp_tool_descriptor_tampering",
+                matched_text=current_descriptor_text[:180],
+                tags=["mcp", "tool_metadata"],
+            ))
+
+    prompt_catalog_tool = any(marker in name for marker in ("prompts/list", "prompt/list", "prompt_catalog", "prompts.catalog"))
+    prompt_catalog_text = "\n".join(_collect_values_for_keys(
+        args,
+        {"description", "prompt", "prompts", "template", "content", "text", "instructions"},
+    ))
+    if prompt_catalog_tool and _contains_mcp_instruction_injection(prompt_catalog_text):
+        matches.append(_mk(
+            rule_id="mcp_prompt_catalog_injection",
+            severity="high",
+            risk=0.78,
+            decision_hint="require_approval",
+            reason_code="mcp_prompt_catalog_injection",
+            matched_text=prompt_catalog_text[:180],
+            tags=["mcp", "prompt_catalog"],
+        ))
+
+    # MCP clients must not trust caller-supplied role/scope claims as authority.
+    privilege_pairs = _extract_pairs(
+        args,
+        {"role", "requested_role", "user_type", "scope", "privilege", "clearance", "is_admin", "admin", "impersonate"},
+    )
+    privileged_values = {"admin", "administrator", "root", "superuser", "all", "global", "privileged", "true"}
+    tool_identity = " ".join([name, _lower(args.get("name")), _lower(args.get("tool_name"))])
+    if not _is_doc_context_tool(name) and any(
+        value in privileged_values or any(marker in value for marker in ("root_admin", "system_admin", "superuser"))
+        for _, value in privilege_pairs
+    ):
+        if any(marker in tool_identity for marker in ("mcp", "tools/call", "admin", "report", "privilege", "access")):
+            matches.append(_mk(
+                rule_id="mcp_client_supplied_privilege",
+                severity="high",
+                risk=0.80,
+                decision_hint="require_approval",
+                reason_code="mcp_client_supplied_privilege",
+                matched_text=",".join(path for path, _ in privilege_pairs)[:180],
+                tags=["mcp", "privilege"],
+            ))
+
+    endpoint_text = "\n".join(_collect_values_for_keys(args, {"endpoint", "path", "url", "target_url", "uri"}))
+    if any(marker in name for marker in ("mcp", "endpoint", "http_request", "fetch_web_resource")) and any(
+        marker in endpoint_text for marker in ("/internal/mcp", "/debug/mcp", "/admin/mcp", "/shadow/mcp", "shadow_endpoint")
+    ):
+        matches.append(_mk(
+            rule_id="mcp_shadow_endpoint_access",
+            severity="high",
+            risk=0.78,
+            decision_hint="require_approval",
+            reason_code="mcp_shadow_endpoint_access",
+            matched_text=endpoint_text[:180],
+            tags=["mcp", "shadow_endpoint"],
+        ))
+
+    if res and _contains_secret_like_value(res):
+        if "orthus_canary_session" in res and any(marker in name for marker in ("get_notes", "context", "memory", "resources/read")):
+            matches.append(_mk(
+                rule_id="mcp_cross_session_context_leak",
+                severity="high",
+                risk=0.82,
+                decision_hint="require_approval",
+                reason_code="mcp_cross_session_context_leak",
+                matched_text=res[:180],
+                tags=["mcp", "context_leak"],
+            ))
+        if _outbound_or_public_tool(name):
+            matches.append(_mk(
+                rule_id="sensitive_tool_response_exposure",
+                severity="high",
+                risk=0.90,
+                decision_hint="block",
+                reason_code="sensitive_tool_response_exposure",
+                matched_text=res[:180],
+                tags=["exfiltration", "tool_result"],
+            ))
+    if _contains_secret_like_value(combined) and any(
+        marker in combined for marker in ("cannot reveal", "can't reveal", "cannot provide", "confidential", "not allowed")
+    ):
+        matches.append(_mk(
+            rule_id="refusal_induced_leakage",
+            severity="high",
+            risk=0.86,
+            decision_hint="block",
+            reason_code="refusal_induced_leakage",
+            matched_text=combined[:180],
+            tags=["exfiltration", "tool_result"],
+        ))
+
     # schema_anomaly.dynamic_schema_retry
     suspicious_retry_keys = {
         "debug_env_dump",
@@ -367,9 +723,7 @@ def scan_tool_call_validators(
         "ignore_validation",
         "validation_mode",
     }
-    tool_is_doc_context = any(
-        marker in name for marker in ("search_kb", "search_logs", "read_documentation", "generate_response_draft")
-    )
+    tool_is_doc_context = _is_doc_context_tool(name)
     args_keys = {_lower(k) for k in args.keys()}
     has_suspicious_retry_params = bool(args_keys.intersection(suspicious_retry_keys))
     has_schema_retry_mutation = bool(args_keys.intersection(retry_mutation_keys))
@@ -1272,6 +1626,145 @@ def scan_tool_call_validators(
                 tags=["payment"],
             ))
 
+    effective_name = _effective_tool_name(name, args)
+    effective_args = _effective_tool_args(args)
+    effective_is_doc_context = _is_doc_context_tool(effective_name)
+
+    # Classic MCP handler regressions: typed argument-role checks, not global prose scans.
+    sql_arg_tools = {
+        "search_users",
+        "check_username",
+        "query_user",
+        "search_records",
+        "db.search",
+        "database.search",
+    }
+    sql_arg_keys = {"name", "username", "user", "email", "query", "filter", "where"}
+    if not effective_is_doc_context and (
+        effective_name in sql_arg_tools or any(marker in effective_name for marker in ("sql", "database", "db.", "search_users"))
+    ):
+        for path, value in _iter_string_args(effective_args, sql_arg_keys):
+            if _has_sql_injection_shape(value):
+                matches.append(_mk(
+                    rule_id="classic.sql_injection_argument",
+                    severity="high",
+                    risk=0.82,
+                    decision_hint="require_approval",
+                    reason_code="sql_injection_argument_risk",
+                    matched_text=f"{path}={value}"[:180],
+                    tags=["classic_mcp", "database"],
+                ))
+                break
+
+    command_arg_tools = {
+        "ping_host",
+        "run_diagnostic",
+        "lookup_host",
+        "traceroute",
+        "resolve_host",
+        "backup_project",
+        "create_backup",
+    }
+    command_arg_keys = {"host", "hostname", "target", "command", "cmd", "args", "folder_name", "directory"}
+    if not effective_is_doc_context and (
+        effective_name in command_arg_tools or any(marker in effective_name for marker in ("command", "shell", "diagnostic", "backup"))
+    ):
+        for path, value in _iter_string_args(effective_args, command_arg_keys):
+            if _has_command_injection_shape(value):
+                matches.append(_mk(
+                    rule_id="classic.command_injection_argument",
+                    severity="high",
+                    risk=0.84,
+                    decision_hint="require_approval",
+                    reason_code="command_injection_argument_risk",
+                    matched_text=f"{path}={value}"[:180],
+                    tags=["classic_mcp", "command_injection"],
+                ))
+                break
+
+    path_arg_tools = {
+        "read_file",
+        "view_file",
+        "view_local_system_file",
+        "get_file",
+        "read_resource",
+        "resources/read",
+        "download_file",
+    }
+    path_arg_keys = {"path", "file", "filename", "file_path", "uri", "resource"}
+    if not effective_is_doc_context and (
+        effective_name in path_arg_tools or any(marker in effective_name for marker in ("read_file", "file", "resource"))
+    ):
+        for path, value in _iter_string_args(effective_args, path_arg_keys):
+            if _has_path_traversal_shape(value):
+                matches.append(_mk(
+                    rule_id="classic.path_traversal_argument",
+                    severity="high",
+                    risk=0.82,
+                    decision_hint="require_approval",
+                    reason_code="path_traversal_argument_risk",
+                    matched_text=f"{path}={value}"[:180],
+                    tags=["classic_mcp", "path"],
+                ))
+                break
+
+    ssrf_arg_tools = {
+        "fetch_url",
+        "fetch_web_resource",
+        "scrape_page",
+        "web_sync",
+        "index_url",
+        "download_url",
+    }
+    ssrf_arg_keys = {"url", "target_url", "uri", "endpoint", "source_url"}
+    if not effective_is_doc_context and effective_name in ssrf_arg_tools:
+        for path, value in _iter_string_args(effective_args, ssrf_arg_keys):
+            if _url_has_ssrf_target(value):
+                matches.append(_mk(
+                    rule_id="classic.ssrf_argument",
+                    severity="high",
+                    risk=0.84,
+                    decision_hint="require_approval",
+                    reason_code="ssrf_argument_risk",
+                    matched_text=f"{path}={value}"[:180],
+                    tags=["classic_mcp", "ssrf"],
+                ))
+                break
+
+    xxe_arg_tools = {"parse_xml", "import_xml", "validate_xml", "xml.parse", "process_xml"}
+    xxe_arg_keys = {"xml", "xml_content", "content", "document", "body"}
+    if not effective_is_doc_context and (effective_name in xxe_arg_tools or "xml" in effective_name):
+        for path, value in _iter_string_args(effective_args, xxe_arg_keys):
+            if _has_xxe_shape(value):
+                matches.append(_mk(
+                    rule_id="classic.xxe_argument",
+                    severity="high",
+                    risk=0.84,
+                    decision_hint="require_approval",
+                    reason_code="xxe_argument_risk",
+                    matched_text=f"{path}={value}"[:180],
+                    tags=["classic_mcp", "xxe"],
+                ))
+                break
+
+    file_write_tools = {"write_file", "create_file", "update_file", "save_file", "write_resource"}
+    file_write_path_keys = {"path", "file", "filename", "file_path", "target"}
+    if not effective_is_doc_context and (effective_name in file_write_tools or "write_file" in effective_name):
+        write_content = "\n".join(_collect_values_for_keys(effective_args, {"content", "body", "data"}))
+        content_exec = any(token in write_content for token in ("#!/", "curl ", "wget ", "bash", " sh ", "os.system", "subprocess"))
+        for path, value in _iter_string_args(effective_args, file_write_path_keys):
+            if _has_executable_or_sensitive_write_path(value) and (content_exec or value.startswith("/etc/") or "authorized_keys" in value):
+                matches.append(_mk(
+                    rule_id="classic.arbitrary_file_write",
+                    severity="critical",
+                    risk=0.90,
+                    decision_hint="block",
+                    reason_code="arbitrary_file_write_risk",
+                    matched_text=f"{path}={value}"[:180],
+                    tags=["classic_mcp", "file_write"],
+                ))
+                break
+
     # database.sql_injection
     if "query_database" in name:
         sql = _lower(args.get("sql"))
@@ -1797,6 +2290,16 @@ def scan_tool_call_validators(
                 reason_code="recursive_sampling_call",
                 matched_text=sampling_text[:180],
                 tags=["sampling"],
+            ))
+        if _contains_mcp_instruction_injection(sampling_text):
+            matches.append(_mk(
+                rule_id="mcp_sampling_prompt_injection",
+                severity="high",
+                risk=0.78,
+                decision_hint="require_approval",
+                reason_code="mcp_sampling_prompt_injection",
+                matched_text=sampling_text[:180],
+                tags=["mcp", "sampling"],
             ))
         if _as_int(args.get("maxTokens") or args.get("max_tokens")) >= 100000:
             matches.append(_mk(

@@ -56,6 +56,10 @@ Examples:
 - `hidden_instruction_marker`
 - `mcp_hidden_instruction`
 - `recent_prompt_injection`
+- `mcp_tool_descriptor_injection`
+- `mcp_prompt_catalog_injection`
+- `mcp_sampling_prompt_injection`
+- `refusal_induced_leakage`
 
 Meaning:
 - Untrusted context appears to be trying to alter instructions or tool behavior.
@@ -70,6 +74,8 @@ Examples:
 - `spreadsheet_formula_exfil`
 - `public_comment_secret_exfil`
 - `auth_redirect_exfil_risk`
+- `sensitive_tool_response_exposure`
+- `mcp_cross_session_context_leak`
 
 Meaning:
 - Action may move sensitive data to an external or hidden sink.
@@ -82,6 +88,9 @@ Examples:
 - `path_traversal_marker`
 - `schema_path_traversal`
 - `environment_secret_dump`
+- `path_traversal_argument_risk`
+- `ssrf_argument_risk`
+- `xxe_argument_risk`
 
 Meaning:
 - Action references sensitive paths/resources or traversal patterns.
@@ -96,6 +105,11 @@ Examples:
 - `command_injection`
 - `readonly_database_write_attempt`
 - `database_ransomware_pattern`
+- `mcp_tool_descriptor_tampering`
+- `mcp_client_supplied_privilege`
+- `sql_injection_argument_risk`
+- `command_injection_argument_risk`
+- `arbitrary_file_write_risk`
 
 Meaning:
 - Tooling metadata, registration, schema, or arguments appear unsafe.
@@ -112,6 +126,7 @@ Examples:
 - `state_key_pollution`
 - `payment_verification_bruteforce`
 - `payment_card_enumeration`
+- `mcp_shadow_endpoint_access`
 
 Meaning:
 - Suspicious MCP/session/protocol lifecycle behavior.
