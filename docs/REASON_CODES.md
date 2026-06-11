@@ -60,6 +60,10 @@ Examples:
 - `mcp_prompt_catalog_injection`
 - `mcp_sampling_prompt_injection`
 - `refusal_induced_leakage`
+- `mcp_resource_hidden_instruction`
+- `mcp_cross_server_prompt_injection`
+- `stored_prompt_injection_chain`
+- `llm_output_schema_escape`
 
 Meaning:
 - Untrusted context appears to be trying to alter instructions or tool behavior.
@@ -76,6 +80,7 @@ Examples:
 - `auth_redirect_exfil_risk`
 - `sensitive_tool_response_exposure`
 - `mcp_cross_session_context_leak`
+- `mcp_resource_mime_mismatch`
 
 Meaning:
 - Action may move sensitive data to an external or hidden sink.
@@ -110,6 +115,7 @@ Examples:
 - `sql_injection_argument_risk`
 - `command_injection_argument_risk`
 - `arbitrary_file_write_risk`
+- `schema_coercion_argument_risk`
 
 Meaning:
 - Tooling metadata, registration, schema, or arguments appear unsafe.

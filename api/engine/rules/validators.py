@@ -241,6 +241,37 @@ def _contains_mcp_instruction_injection(value: str) -> bool:
     return any(marker in lower for marker in authority_markers) and any(marker in lower for marker in leak_markers)
 
 
+def _contains_context_control_instruction(value: str) -> bool:
+    if not value:
+        return False
+    lower = value.lower()
+    control_markers = (
+        "ignore previous",
+        "ignore all previous",
+        "system override",
+        "system directive",
+        "output json only",
+        "return only",
+        "do not inform the user",
+        "bypass",
+    )
+    action_markers = (
+        "action",
+        "next_step",
+        "payload",
+        "endpoint",
+        "tool",
+        "command",
+        "execute",
+        "delete",
+        "deploy",
+        "send_email",
+        "write_file",
+        "update_db",
+    )
+    return any(marker in lower for marker in control_markers) and any(marker in lower for marker in action_markers)
+
+
 def _contains_secret_like_value(value: str) -> bool:
     lower = value.lower()
     if any(
@@ -404,6 +435,140 @@ def _has_executable_or_sensitive_write_path(value: str) -> bool:
             "authorized_keys",
         )
     ) or lower.endswith((".sh", ".bash", ".zsh", ".py", ".service"))
+
+
+def _contains_hidden_markup(value: str) -> bool:
+    lower = value.lower()
+    return any(
+        marker in lower
+        for marker in (
+            "<script",
+            "</script",
+            "display:none",
+            "display: none",
+            "visibility:hidden",
+            "visibility: hidden",
+            "opacity:0",
+            "opacity: 0",
+            "onerror=",
+            "onload=",
+            "<!--",
+        )
+    )
+
+
+def _contains_action_control_payload(value: str) -> bool:
+    lower = value.lower()
+    return any(
+        marker in lower
+        for marker in (
+            '"action"',
+            "'action'",
+            "next_step",
+            "execute_api",
+            "run_deploy",
+            "delete",
+            "send_email",
+            "write_file",
+            "update_db",
+            "endpoint",
+            "payload",
+            "command",
+        )
+    )
+
+
+def _side_effecting_tool(name: str) -> bool:
+    return any(
+        marker in name
+        for marker in (
+            "send_",
+            "post_",
+            "publish",
+            "execute",
+            "deploy",
+            "delete",
+            "write",
+            "update_db",
+            "update_database",
+            "execute_api",
+            "http_request",
+            "set_webhook",
+            "create_scheduled_task",
+        )
+    )
+
+
+def _external_destination_in_args(obj: Any) -> bool:
+    return any(_has_external_http(value) for _, value in _iter_string_args(obj, {"url", "endpoint", "target_url", "to", "body", "content", "message"}))
+
+
+def _contains_permissive_schema(obj: Any) -> bool:
+    if isinstance(obj, Mapping):
+        for key, value in obj.items():
+            key_l = _lower(key)
+            if key_l == "additionalproperties" and value is True:
+                return True
+            if key_l in {"unknown_fields", "raw", "metadata", "extra", "extensions"} and isinstance(value, Mapping):
+                return True
+            if _contains_permissive_schema(value):
+                return True
+    elif isinstance(obj, list):
+        return any(_contains_permissive_schema(item) for item in obj)
+    return False
+
+
+def _nested_risky_unknown_fields(obj: Any) -> list[str]:
+    risky_keys = {"action", "cmd", "command", "exec", "tool", "endpoint", "body", "payload", "url"}
+    out: list[str] = []
+
+    def _walk(value: Any, path: str) -> None:
+        if isinstance(value, Mapping):
+            for key, nested in value.items():
+                key_l = _lower(key)
+                next_path = f"{path}.{key_l}" if path else key_l
+                if key_l in risky_keys and nested not in (None, "", {}, []):
+                    out.append(next_path)
+                _walk(nested, next_path)
+        elif isinstance(value, list):
+            for idx, nested in enumerate(value):
+                _walk(nested, f"{path}[{idx}]")
+
+    _walk(obj, "")
+    return out
+
+
+def _extract_allowed_output_fields(obj: Any) -> set[str]:
+    allowed: set[str] = set()
+    if isinstance(obj, Mapping):
+        raw = obj.get("allowed_fields") or obj.get("allowedFields")
+        if isinstance(raw, list):
+            allowed.update(_lower(item) for item in raw)
+        schema = obj.get("expected_output_schema") or obj.get("output_schema") or obj.get("schema")
+        if isinstance(schema, Mapping):
+            properties = schema.get("properties")
+            if isinstance(properties, Mapping):
+                allowed.update(_lower(key) for key in properties.keys())
+        for value in obj.values():
+            allowed.update(_extract_allowed_output_fields(value))
+    elif isinstance(obj, list):
+        for item in obj:
+            allowed.update(_extract_allowed_output_fields(item))
+    return allowed
+
+
+def _extract_llm_output_objects(obj: Any) -> list[Mapping[str, Any]]:
+    out: list[Mapping[str, Any]] = []
+    if isinstance(obj, Mapping):
+        for key, value in obj.items():
+            key_l = _lower(key)
+            if key_l in {"llm_output", "model_output", "parsed_output", "output"} and isinstance(value, Mapping):
+                out.append(value)
+            out.extend(_extract_llm_output_objects(value))
+    elif isinstance(obj, list):
+        for item in obj:
+            out.extend(_extract_llm_output_objects(item))
+    return out
 
 
 def _sql_has_mutation(sql: str) -> bool:
@@ -703,6 +868,102 @@ def scan_tool_call_validators(
             matched_text=combined[:180],
             tags=["exfiltration", "tool_result"],
         ))
+
+    effective_name_early = _effective_tool_name(name, args)
+    effective_args_early = _effective_tool_args(args)
+
+    # MCP resources can carry executable/hidden markup while claiming a text MIME.
+    resource_read_tool = any(marker in name for marker in ("resources/read", "mcp.resources/read", "resource/read"))
+    if resource_read_tool:
+        mime_type = _lower(args.get("mimeType") or args.get("mime_type") or args.get("content_type"))
+        resource_text = "\n".join(
+            _collect_values_for_keys(args, {"text", "content", "body", "data", "resource_text"})
+            + ([res] if res else [])
+        )
+        declared_plain_text = mime_type in {"text/markdown", "text/plain", "markdown", "plain"}
+        if declared_plain_text and _contains_hidden_markup(resource_text):
+            matches.append(_mk(
+                rule_id="mcp_resource.mime_mismatch",
+                severity="high",
+                risk=0.78,
+                decision_hint="require_approval",
+                reason_code="mcp_resource_mime_mismatch",
+                matched_text=resource_text[:180],
+                tags=["mcp_resource", "context_graph"],
+            ))
+        if declared_plain_text and _contains_hidden_markup(resource_text) and (
+            _contains_mcp_instruction_injection(resource_text) or _contains_context_control_instruction(resource_text)
+        ):
+            matches.append(_mk(
+                rule_id="mcp_resource.hidden_instruction",
+                severity="high",
+                risk=0.82,
+                decision_hint="require_approval",
+                reason_code="mcp_resource_hidden_instruction",
+                matched_text=resource_text[:180],
+                tags=["mcp_resource", "context_graph"],
+            ))
+
+    cross_server_fields = _extract_pairs(args, {"prompt_server", "prompt_server_id", "resource_server", "resource_server_id", "source_server", "source_server_id"})
+    server_values = {value for _, value in cross_server_fields if value}
+    cross_server = len(server_values) >= 2
+    untrusted_resource_blob = "\n".join(_collect_values_for_keys(args, {"resource_content", "inserted_resource", "template_input", "body", "content", "message"}))
+    if cross_server and _side_effecting_tool(name) and (
+        _contains_mcp_instruction_injection(untrusted_resource_blob) or _contains_context_control_instruction(untrusted_resource_blob)
+    ):
+        matches.append(_mk(
+            rule_id="mcp_context.cross_server_prompt_injection",
+            severity="high",
+            risk=0.82,
+            decision_hint="require_approval",
+            reason_code="mcp_cross_server_prompt_injection",
+            matched_text=untrusted_resource_blob[:180],
+            tags=["mcp", "context_graph"],
+        ))
+
+    has_permissive_schema = _contains_permissive_schema(args)
+    risky_unknown_fields = _nested_risky_unknown_fields(args)
+    schema_tool_context = any(marker in name for marker in ("tools/list", "tools/register", "tool_schema", "schema", "execute", "deploy", "http_request"))
+    if has_permissive_schema and risky_unknown_fields and (schema_tool_context or _side_effecting_tool(effective_name_early) or _external_destination_in_args(args)):
+        matches.append(_mk(
+            rule_id="schema.coercion_argument_risk",
+            severity="high",
+            risk=0.80,
+            decision_hint="require_approval",
+            reason_code="schema_coercion_argument_risk",
+            matched_text=",".join(risky_unknown_fields)[:180],
+            tags=["schema", "context_graph"],
+        ))
+
+    allowed_output_fields = _extract_allowed_output_fields(args)
+    llm_output_objects = _extract_llm_output_objects(args)
+    escaped_fields: set[str] = set()
+    for output_obj in llm_output_objects:
+        keys = {_lower(key) for key in output_obj.keys()}
+        if allowed_output_fields:
+            escaped_fields.update(keys - allowed_output_fields)
+        escaped_fields.update(keys.intersection({"action", "payload", "endpoint", "tool", "command", "cmd", "body"}))
+    if escaped_fields and (_side_effecting_tool(name) or _external_destination_in_args(args)):
+        matches.append(_mk(
+            rule_id="llm.output_schema_escape",
+            severity="high",
+            risk=0.84,
+            decision_hint="require_approval",
+            reason_code="llm_output_schema_escape",
+            matched_text=",".join(sorted(escaped_fields))[:180],
+            tags=["llm_output", "context_graph"],
+        ))
+        prompt_origin = _lower(args.get("prompt_source") or args.get("source") or args.get("origin"))
+        if any(marker in prompt_origin for marker in ("stored", "untrusted", "mcp")):
+            matches.append(_mk(
+                rule_id="stored_prompt.injection_chain",
+                severity="high",
+                risk=0.86,
+                decision_hint="require_approval",
+                reason_code="stored_prompt_injection_chain",
+                matched_text=prompt_origin[:180],
+                tags=["stored_prompt", "context_graph"],
+            ))
 
     # schema_anomaly.dynamic_schema_retry
     suspicious_retry_keys = {
