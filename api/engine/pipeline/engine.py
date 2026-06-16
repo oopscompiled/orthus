@@ -104,6 +104,7 @@ class FirewallEngine:
                 tool_description=request.tool_call.description,
                 tool_args=request.tool_call.args,
                 tool_result=request.tool_call.result,
+                request_text=request.text,
             )
             if structured_matches:
                 merged: dict[str, RuleMatch] = {}
@@ -133,11 +134,15 @@ class FirewallEngine:
             policy_decision=policy_decision,
         )
 
+        cerber_tool_args = dict(request.tool_call.args) if request.tool_call else None
+        if cerber_tool_args is not None and request.tool_call and request.tool_call.result:
+            cerber_tool_args["_tool_result"] = request.tool_call.result
+
         cerber = self.cerber_scorer.score(
             decision_result=preliminary,
             session_context=session_context,
             tool_name=request.tool_call.name if request.tool_call else None,
-            tool_args=dict(request.tool_call.args) if request.tool_call else None,
+            tool_args=cerber_tool_args,
             actor=actor_dict,
         )
         routes.append("cerber")

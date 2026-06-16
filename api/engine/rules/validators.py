@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import base64
+import binascii
 from collections.abc import Iterable, Mapping
 from typing import Any
 import re
+from urllib.parse import unquote
 
 from .models import RuleMatch
 
@@ -272,13 +275,46 @@ def _contains_context_control_instruction(value: str) -> bool:
     return any(marker in lower for marker in control_markers) and any(marker in lower for marker in action_markers)
 
 
+def _expanded_marker_texts(value: Any) -> list[str]:
+    raw = str(value or "")
+    values = {raw, _lower(value)}
+    decoded = raw
+    for _ in range(2):
+        decoded = unquote(decoded)
+        values.add(decoded)
+        values.add(decoded.lower())
+
+    for token in re.findall(r"[A-Za-z0-9_-]{16,}={0,2}", raw):
+        padded = token + ("=" * ((4 - len(token) % 4) % 4))
+        try:
+            decoded_bytes = base64.urlsafe_b64decode(padded.encode("ascii"))
+            decoded_text = decoded_bytes.decode("utf-8", errors="ignore")
+        except (binascii.Error, ValueError):
+            continue
+        if decoded_text:
+            values.add(decoded_text)
+            values.add(decoded_text.lower())
+
+    string_values = [v for _, v in _iter_string_args(value, None)] if isinstance(value, Mapping) else []
+    if string_values:
+        joined_values = "".join(str(v) for v in string_values)
+        values.add(joined_values)
+        values.add(re.sub(r"[^A-Za-z0-9_]", "", joined_values))
+    values.add(re.sub(r"[^A-Za-z0-9_]", "", raw))
+    return list(values)
+
+
 def _contains_secret_like_value(value: str) -> bool:
-    lower = value.lower()
+    expanded = "\n".join(_expanded_marker_texts(value))
+    lower = expanded.lower()
     if any(
         marker in lower
         for marker in (
             "orthus_canary_secret",
             "orthus_canary_session",
+            "orthus_derived_secret",
+            "orthus_reconstructed_token",
+            "orthus_test_verifier_code",
             "bearer ",
             "access_token",
             "refresh_token",
@@ -293,7 +329,129 @@ def _contains_secret_like_value(value: str) -> bool:
         )
     ):
         return True
-    return bool(re.search(r"\b[A-Z0-9_]{8,}_CANARY_[A-Z0-9_]{4,}\b", value))
+    return bool(re.search(r"[A-Z0-9_]{8,}_CANARY_[A-Z0-9_]{4,}", expanded))
+
+
+def _extract_sensitive_markers(value: Any) -> list[str]:
+    expanded = "\n".join(_expanded_marker_texts(value))
+    text = expanded.lower()
+    markers = set(re.findall(r"ORTHUS_(?:CANARY|DERIVED|RECONSTRUCTED|MASKED|TEST)_[A-Z0-9_]+", expanded))
+    if "orthus_canary_secret" in text:
+        markers.add("ORTHUS_CANARY_SECRET")
+    if "orthus_derived_secret" in text:
+        markers.add("ORTHUS_DERIVED_SECRET")
+    if "orthus_reconstructed_token" in text:
+        markers.add("ORTHUS_RECONSTRUCTED_TOKEN")
+    return sorted(markers)
+
+
+def _contains_derived_sensitive_value(value: Any) -> bool:
+    lower = "\n".join(_expanded_marker_texts(value)).lower()
+    return "orthus_derived_secret" in lower or "orthus_reconstructed_token" in lower
+
+
+def _contains_template_secret_reference(value: str) -> bool:
+    lower = value.lower()
+    return bool(re.search(r"\{\{\s*[^}]*?(secret|token|password|api[_-]?key|session|credential)[^}]*?\}\}", lower))
+
+
+def _contains_schema_error_details(value: str) -> bool:
+    lower = value.lower()
+    if not lower:
+        return False
+    schema_markers = (
+        "jsonschema",
+        "pydantic",
+        "validationerror",
+        "inputschema",
+        "required fields",
+        "required:",
+        "additionalproperties",
+        "stack trace",
+        "traceback",
+        "$defs",
+        "properties",
+        "constraint",
+    )
+    internal_markers = (
+        "internal",
+        "debug",
+        "schema",
+        "validator",
+        "trace",
+        "required",
+        "constraint",
+    )
+    return any(marker in lower for marker in schema_markers) and any(marker in lower for marker in internal_markers)
+
+
+def _public_or_untrusted_context(obj: Mapping[str, Any], request_text: str = "") -> bool:
+    blob = "\n".join([
+        _lower(obj.get("visibility")),
+        _lower(obj.get("audience")),
+        _lower(obj.get("recipient_type")),
+        _lower(obj.get("target_context")),
+        _lower(obj.get("source_type")),
+        request_text,
+    ])
+    return any(marker in blob for marker in ("public", "customer", "external", "untrusted", "user_visible", "user-visible"))
+
+
+def _is_http_action_tool(name: str) -> bool:
+    return any(marker in name for marker in ("http_request", "http_client", "fetch_url", "fetch_web_resource", "webhook", "request"))
+
+
+def _is_public_update_tool(name: str) -> bool:
+    return any(
+        marker in name
+        for marker in (
+            "post_public",
+            "add_public",
+            "post_customer",
+            "publish_status",
+            "send_public",
+            "update_ticket_public",
+            "public_comment",
+            "public_issue",
+            "public_page",
+            "customer_dashboard",
+        )
+    )
+
+
+def _has_external_recipient(obj: Mapping[str, Any]) -> bool:
+    recipient_blob = "\n".join(_collect_values_for_keys(obj, {"to", "recipient", "recipients", "email", "channel"}))
+    lower = recipient_blob.lower()
+    if not lower:
+        return False
+    if "@localhost" in lower or ".internal" in lower or ".internal.company.com" in lower:
+        return False
+    return "@" in lower or "external" in lower or "public" in lower
+
+
+def _extract_markdown_image_urls(value: str) -> list[str]:
+    urls = re.findall(r"!\[[^\]]*\]\(([^)\s]+)", value)
+    urls.extend(re.findall(r"<img[^>]+src=[\"']([^\"']+)", value, flags=re.IGNORECASE))
+    reference_ids = re.findall(r"!\[[^\]]*\]\[([^\]]+)\]", value)
+    if reference_ids:
+        definitions = {
+            ref.lower(): url
+            for ref, url in re.findall(r"^\s*\[([^\]]+)\]:\s*(\S+)", value, flags=re.IGNORECASE | re.MULTILINE)
+        }
+        urls.extend(definitions.get(ref.lower(), "") for ref in reference_ids)
+    return urls
+
+
+def _is_tool_enumeration_action(name: str, args: Mapping[str, Any], request_text: str) -> bool:
+    blob = "\n".join([name, _lower(args), request_text])
+    if not any(marker in name for marker in ("list_tools", "tools/list", "system.list_tools", "tool_catalog", "capabilities")):
+        return False
+    return any(marker in blob for marker in ("all available tools", "hidden capabilities", "parameters", "schemas", "complete tool", "registered tools", "capabilities"))
+
+
+def _is_dev_or_local_context(args: Mapping[str, Any], actor_role: str = "") -> bool:
+    blob = "\n".join([_lower(args), actor_role])
+    return any(marker in blob for marker in ("local", "dev", "debug", "developer", "qa", "integration_test"))
 
 
 def _outbound_or_public_tool(name: str) -> bool:
@@ -495,8 +653,152 @@ def _side_effecting_tool(name: str) -> bool:
             "http_request",
             "set_webhook",
             "create_scheduled_task",
+            "refund",
+            "export",
         )
     )
+
+
+def _high_impact_action_tool(name: str) -> bool:
+    return _side_effecting_tool(name) or any(
+        marker in name
+        for marker in (
+            "delete_record",
+            "delete_file",
+            "resources/delete",
+            "refund_payment",
+            "export_customer_data",
+            "query_database",
+            "execute_command",
+            "write_file",
+            "deploy",
+            "update_config",
+        )
+    )
+
+
+def _trusted_user_intent_bound(obj: Mapping[str, Any]) -> bool:
+    trusted_value = obj.get("trusted_user_intent") or obj.get("trusted_intent") or obj.get("user_intent_trusted")
+    if trusted_value is True:
+        return True
+    if isinstance(trusted_value, Mapping) and bool(trusted_value.get("trusted")):
+        return True
+
+    intent_source = _lower(obj.get("intent_source") or obj.get("intentSource") or obj.get("source_of_authority"))
+    if intent_source in {"trusted_user", "user", "human_approved", "current_user"}:
+        return True
+
+    refs = obj.get("source_refs") or obj.get("sourceRefs") or []
+    if isinstance(refs, list):
+        for ref in refs:
+            if not isinstance(ref, Mapping):
+                continue
+            ref_type = _lower(ref.get("type") or ref.get("source_type") or ref.get("source"))
+            trusted = bool(ref.get("trusted") or ref.get("trusted_user_intent"))
+            if trusted and ref_type in {"user", "trusted_user", "human_approval", "current_user_intent"}:
+                return True
+    return False
+
+
+def _requires_trusted_intent(obj: Mapping[str, Any]) -> bool:
+    return bool(
+        obj.get("requires_trusted_intent")
+        or obj.get("require_trusted_intent")
+        or obj.get("intent_required")
+        or obj.get("provenance_required")
+    )
+
+
+def _provenance_values(obj: Any) -> list[str]:
+    keys = {
+        "source",
+        "source_type",
+        "sourceType",
+        "origin",
+        "prompt_source",
+        "promptSource",
+        "provenance",
+        "generated_from",
+        "generatedFrom",
+        "action_source",
+        "actionSource",
+        "context_source",
+        "contextSource",
+    }
+    values: list[str] = []
+    if isinstance(obj, Mapping):
+        for key, value in obj.items():
+            if str(key) in keys or _lower(key) in {_lower(k) for k in keys}:
+                values.append(_lower(value))
+            values.extend(_provenance_values(value))
+    elif isinstance(obj, list):
+        for item in obj:
+            values.extend(_provenance_values(item))
+    return values
+
+
+def _has_untrusted_action_provenance(obj: Mapping[str, Any]) -> bool:
+    markers = (
+        "untrusted",
+        "mcp_resource",
+        "tool_result",
+        "stored_prompt",
+        "prompt_render",
+        "rendered_prompt",
+        "external_content",
+        "customer_content",
+        "db_row",
+        "retrieved_resource",
+    )
+    if any(any(marker in value for marker in markers) for value in _provenance_values(obj)):
+        return True
+
+    refs = obj.get("source_refs") or obj.get("sourceRefs") or []
+    if isinstance(refs, list):
+        for ref in refs:
+            if not isinstance(ref, Mapping):
+                continue
+            ref_blob = _lower(ref)
+            if "trusted" in ref and bool(ref.get("trusted")):
+                continue
+            if any(marker in ref_blob for marker in markers):
+                return True
+    return False
+
+
+def _has_provenance_refs(obj: Mapping[str, Any]) -> bool:
+    refs = obj.get("source_refs") or obj.get("sourceRefs")
+    if isinstance(refs, list) and refs:
+        return True
+    return any(_provenance_values(obj))
+
+
+def _summary_or_readonly_intent(value: str) -> bool:
+    lower = value.lower()
+    return any(
+        marker in lower
+        for marker in (
+            "summarize",
+            "summary",
+            "recap",
+            "review",
+            "analyze",
+            "explain",
+            "read",
+            "search",
+        )
+    )
+
+
+def _stale_or_cross_event_binding(obj: Mapping[str, Any]) -> bool:
+    current_event = _lower(obj.get("current_event_id") or obj.get("currentEventId") or obj.get("event_id") or obj.get("eventId"))
+    approved_event = _lower(obj.get("approved_event_id") or obj.get("approval_event_id") or obj.get("approvedEventId") or obj.get("approvalEventId"))
+    source_event = _lower(obj.get("source_event_id") or obj.get("sourceEventId"))
+    if current_event and approved_event and current_event != approved_event:
+        return True
+    if current_event and source_event and current_event != source_event and bool(obj.get("uses_prior_approval")):
+        return True
+    return False
 
 
 def _external_destination_in_args(obj: Any) -> bool:
@@ -720,6 +1022,7 @@ def scan_tool_call_validators(
     tool_description: str | None,
     tool_args: Mapping[str, object] | None,
     tool_result: str | None,
+    request_text: str | None = None,
 ) -> list[RuleMatch]:
     matches: list[RuleMatch] = []
     args: dict[str, Any] = dict(tool_args or {})
@@ -727,6 +1030,7 @@ def scan_tool_call_validators(
     name = _lower(tool_name)
     desc = _lower(tool_description)
     res = _lower(tool_result)
+    req_text = _lower(request_text)
     combined = "\n".join([name, desc, _lower(args), res])
 
     uri_values = extract_uris(args)
@@ -872,6 +1176,124 @@ def scan_tool_call_validators(
     effective_name_early = _effective_tool_name(name, args)
     effective_args_early = _effective_tool_args(args)
 
+    # Tool abuse / exfiltration hardening. These checks are scoped to concrete
+    # tool surfaces and sink fields, not generic mentions of tools/errors.
+    untrusted_or_external = _public_or_untrusted_context(args, req_text)
+    if _is_tool_enumeration_action(name, args, req_text) and untrusted_or_external and not _is_dev_or_local_context(args):
+        matches.append(_mk(
+            rule_id="tool_abuse.surface_enumeration",
+            severity="high",
+            risk=0.74,
+            decision_hint="require_approval",
+            reason_code="tool_surface_enumeration_attempt",
+            matched_text=(req_text or _lower(args))[:180],
+            tags=["tool_abuse", "reconnaissance"],
+        ))
+
+    schema_error_blob = "\n".join(
+        _collect_values_for_keys(args, {"error", "error_message", "debug_error", "validation_error", "body", "message", "content"})
+        + ([res] if res else [])
+    )
+    if (
+        _contains_schema_error_details(schema_error_blob)
+        and (_outbound_or_public_tool(name) or _is_public_update_tool(name) or untrusted_or_external)
+    ):
+        matches.append(_mk(
+            rule_id="tool_abuse.schema_error_leakage",
+            severity="high",
+            risk=0.78,
+            decision_hint="require_approval",
+            reason_code="tool_schema_error_leakage",
+            matched_text=schema_error_blob[:180],
+            tags=["tool_abuse", "schema"],
+        ))
+
+    http_destination_values = _collect_values_for_keys(args, {"url", "target_url", "endpoint", "callback", "callback_url"})
+    has_external_http_destination = any(_has_external_http(value) for value in http_destination_values) or _external_destination_in_args(args)
+    exfil_field_values = _iter_string_args(args, {"headers", "header", "query", "params", "body", "data", "payload", "callback", "callback_url"})
+    exfil_blob = "\n".join(
+        [value for _, value in exfil_field_values]
+        + [
+            str(args),
+            _lower(args.get("headers")),
+            _lower(args.get("query")),
+            _lower(args.get("params")),
+            _lower(args.get("body")),
+            _lower(args.get("data")),
+            _lower(args.get("payload")),
+        ]
+    )
+    has_secret_material = _contains_secret_like_value(exfil_blob) or _contains_template_secret_reference(exfil_blob)
+    telemetry_like = any(
+        marker in value
+        for value in http_destination_values + [name]
+        for marker in ("telemetry", "trace", "analytics", "logging", "log", "webhook")
+    )
+    if _is_http_action_tool(name) and (has_external_http_destination or telemetry_like) and has_secret_material and telemetry_like:
+        matches.append(_mk(
+            rule_id="exfil.covert_http_channel",
+            severity="critical",
+            risk=0.90,
+            decision_hint="block",
+            reason_code="covert_http_exfiltration_risk",
+            matched_text=exfil_blob[:180],
+            tags=["exfil", "http"],
+        ))
+    elif _is_http_action_tool(name) and has_external_http_destination and has_secret_material:
+        matches.append(_mk(
+            rule_id="exfil.covert_http_channel",
+            severity="critical",
+            risk=0.88,
+            decision_hint="block",
+            reason_code="covert_http_exfiltration_risk",
+            matched_text=exfil_blob[:180],
+            tags=["exfil", "http"],
+        ))
+
+    markdown_blob = "\n".join(_collect_values_for_keys(args, {"content", "body", "message", "markdown", "html"}) + ([res] if res else []))
+    markdown_urls = _extract_markdown_image_urls(markdown_blob)
+    if markdown_urls and any(_has_external_http(url) and _contains_secret_like_value(url) for url in markdown_urls):
+        if "markdown" in name or _outbound_or_public_tool(name) or _is_public_update_tool(name):
+            matches.append(_mk(
+                rule_id="exfil.markdown_image_secret_beacon",
+                severity="critical",
+                risk=0.90,
+                decision_hint="block",
+                reason_code="markdown_image_exfiltration_risk",
+                matched_text=" ".join(markdown_urls)[:180],
+                tags=["exfil", "markdown"],
+            ))
+
+    full_arg_result_blob = "\n".join([_lower(args), res])
+    if _contains_derived_sensitive_value(full_arg_result_blob) and (
+        _outbound_or_public_tool(name) or _is_public_update_tool(name) or _is_http_action_tool(name) or _external_destination_in_args(args)
+    ):
+        matches.append(_mk(
+            rule_id="exfil.derived_sensitive_value_exposure",
+            severity="critical",
+            risk=0.92,
+            decision_hint="block",
+            reason_code="derived_sensitive_value_exposure",
+            matched_text=full_arg_result_blob[:180],
+            tags=["exfil", "derived_secret"],
+        ))
+
+    public_sensitive_sink = _is_public_update_tool(name) or (
+        _outbound_or_public_tool(name) and (_public_or_untrusted_context(args, req_text) or _has_external_recipient(args))
+    )
+    if public_sensitive_sink:
+        public_blob = "\n".join(_collect_values_for_keys(args, {"content", "comment", "body", "message", "text", "update"}))
+        if _contains_secret_like_value(public_blob) or _contains_derived_sensitive_value(public_blob):
+            matches.append(_mk(
+                rule_id="exfil.public_sensitive_update",
+                severity="critical",
+                risk=0.93,
+                decision_hint="block",
+                reason_code="public_sensitive_update_risk",
+                matched_text=public_blob[:180],
+                tags=["exfil", "public_update"],
+            ))
+
     # MCP resources can carry executable/hidden markup while claiming a text MIME.
     resource_read_tool = any(marker in name for marker in ("resources/read", "mcp.resources/read", "resource/read"))
     if resource_read_tool:
@@ -964,6 +1386,77 @@ def scan_tool_call_validators(
                 matched_text=prompt_origin[:180],
                 tags=["stored_prompt", "context_graph"],
             ))
+
+    # Action provenance / trusted intent binding. These checks intentionally
+    # require explicit provenance metadata or explicit intent-binding
+    # requirements; they do not infer trust from payload position or long-context
+    # behavior.
+    trusted_intent_bound = _trusted_user_intent_bound(args)
+    requires_intent = _requires_trusted_intent(args)
+    untrusted_action_source = _has_untrusted_action_provenance(args)
+    has_provenance = _has_provenance_refs(args)
+    high_impact_action = _high_impact_action_tool(effective_name_early)
+    summary_only_to_side_effect = (
+        bool(req_text)
+        and _summary_or_readonly_intent(req_text)
+        and high_impact_action
+        and requires_intent
+    )
+
+    if high_impact_action and requires_intent and not trusted_intent_bound:
+        matches.append(_mk(
+            rule_id="action_provenance.missing_trusted_user_intent",
+            severity="high",
+            risk=0.82,
+            decision_hint="block",
+            reason_code="missing_trusted_user_intent",
+            matched_text=(req_text or name)[:180],
+            tags=["action_provenance", "intent_binding"],
+        ))
+
+    if high_impact_action and untrusted_action_source and not trusted_intent_bound:
+        matches.append(_mk(
+            rule_id="action_provenance.untrusted_context_to_action",
+            severity="high",
+            risk=0.84,
+            decision_hint="block",
+            reason_code="untrusted_context_to_action",
+            matched_text=",".join(_provenance_values(args))[:180],
+            tags=["action_provenance", "intent_binding"],
+        ))
+
+    if high_impact_action and requires_intent and not has_provenance and not trusted_intent_bound:
+        matches.append(_mk(
+            rule_id="action_provenance.provenance_gap",
+            severity="high",
+            risk=0.80,
+            decision_hint="require_approval",
+            reason_code="action_context_provenance_gap",
+            matched_text=name[:180],
+            tags=["action_provenance", "intent_binding"],
+        ))
+
+    if high_impact_action and summary_only_to_side_effect and not trusted_intent_bound:
+        matches.append(_mk(
+            rule_id="action_provenance.summary_intent_side_effect",
+            severity="high",
+            risk=0.82,
+            decision_hint="block",
+            reason_code="missing_trusted_user_intent",
+            matched_text=req_text[:180],
+            tags=["action_provenance", "intent_binding"],
+        ))
+
+    if high_impact_action and _stale_or_cross_event_binding(args):
+        matches.append(_mk(
+            rule_id="action_provenance.stale_or_cross_event_context",
+            severity="high",
+            risk=0.78,
+            decision_hint="require_approval",
+            reason_code="stale_or_cross_event_action_context",
+            matched_text=_lower(args.get("current_event_id") or args.get("event_id") or args.get("approved_event_id"))[:180],
+            tags=["action_provenance", "intent_binding"],
+        ))
 
     # schema_anomaly.dynamic_schema_retry
     suspicious_retry_keys = {

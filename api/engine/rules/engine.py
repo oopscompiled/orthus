@@ -148,11 +148,13 @@ class RulesEngine:
         tool_description: str | None = None,
         tool_args: Mapping[str, object] | None = None,
         tool_result: str | None = None,
+        request_text: str | None = None,
     ) -> list[RuleMatch]:
         matches = scan_tool_call_validators(
             tool_name=tool_name,
             tool_description=tool_description,
             tool_args=tool_args,
             tool_result=tool_result,
+            request_text=request_text,
         )
         return self._dedupe_and_rank(matches)

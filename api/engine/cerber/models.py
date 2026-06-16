@@ -28,6 +28,12 @@ class SessionContext:
     subscription_chain_seed: bool = False
     recent_payment_attempt_signatures: list[str] = field(default_factory=list)
     payment_verification_attempt_count: int = 0
+    last_trusted_intent_event_id: str = ""
+    last_trusted_intent_action: str = ""
+    trusted_intent_age_steps: int = 0
+    recent_sensitive_markers: list[str] = field(default_factory=list)
+    recent_oracle_signatures: list[str] = field(default_factory=list)
+    oracle_iteration_count: int = 0
 
     @classmethod
     def from_input(cls, value: dict | "SessionContext" | None) -> "SessionContext":
@@ -53,6 +59,12 @@ class SessionContext:
                 subscription_chain_seed=bool(value.get("subscription_chain_seed", False)),
                 recent_payment_attempt_signatures=[str(v) for v in value.get("recent_payment_attempt_signatures", [])],
                 payment_verification_attempt_count=int(value.get("payment_verification_attempt_count", 0)),
+                last_trusted_intent_event_id=str(value.get("last_trusted_intent_event_id", "")),
+                last_trusted_intent_action=str(value.get("last_trusted_intent_action", "")),
+                trusted_intent_age_steps=int(value.get("trusted_intent_age_steps", 0)),
+                recent_sensitive_markers=[str(v) for v in value.get("recent_sensitive_markers", [])],
+                recent_oracle_signatures=[str(v) for v in value.get("recent_oracle_signatures", [])],
+                oracle_iteration_count=int(value.get("oracle_iteration_count", 0)),
             )
         return cls()
 

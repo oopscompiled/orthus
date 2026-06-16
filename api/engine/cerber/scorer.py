@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import re
 from typing import Any
+from urllib.parse import unquote
 
 from api.engine.decision.models import DecisionResult
 
@@ -91,6 +94,103 @@ def _extract_payment_signature(tool_args: dict[str, Any] | None) -> tuple[str, s
     return stable, _truncate_value(variant)
 
 
+def _is_side_effecting_tool_name(tool_name: str | None) -> bool:
+    name = str(tool_name or "").lower()
+    return any(
+        marker in name
+        for marker in (
+            "send_",
+            "post_",
+            "publish",
+            "execute",
+            "deploy",
+            "delete",
+            "write",
+            "update",
+            "http_request",
+            "set_webhook",
+            "refund",
+            "export",
+        )
+    )
+
+
+def _iter_string_values(value: Any) -> list[str]:
+    out: list[str] = []
+    if isinstance(value, dict):
+        for nested in value.values():
+            out.extend(_iter_string_values(nested))
+    elif isinstance(value, list):
+        for nested in value:
+            out.extend(_iter_string_values(nested))
+    elif isinstance(value, (str, int, float)):
+        out.append(str(value))
+    return out
+
+
+def _expanded_marker_texts(value: Any) -> list[str]:
+    raw = str(value or "")
+    values = {raw, raw.lower(), re.sub(r"[^A-Za-z0-9_]", "", raw)}
+    decoded = raw
+    for _ in range(2):
+        decoded = unquote(decoded)
+        values.add(decoded)
+        values.add(decoded.lower())
+
+    for token in re.findall(r"[A-Za-z0-9_-]{16,}={0,2}", raw):
+        padded = token + ("=" * ((4 - len(token) % 4) % 4))
+        try:
+            decoded_bytes = base64.urlsafe_b64decode(padded.encode("ascii"))
+            decoded_text = decoded_bytes.decode("utf-8", errors="ignore")
+        except (binascii.Error, ValueError):
+            continue
+        if decoded_text:
+            values.add(decoded_text)
+            values.add(decoded_text.lower())
+
+    if isinstance(value, dict):
+        joined = "".join(_iter_string_values(value))
+        values.add(joined)
+        values.add(re.sub(r"[^A-Za-z0-9_]", "", joined))
+    return list(values)
+
+
+def _extract_sensitive_markers(value: Any) -> list[str]:
+    text = "\n".join(_expanded_marker_texts(value))
+    markers = set(re.findall(r"ORTHUS_(?:CANARY|DERIVED|RECONSTRUCTED|MASKED|TEST)_[A-Z0-9_]+", text))
+    lower = text.lower()
+    if "orthus_canary_secret" in lower:
+        markers.add("ORTHUS_CANARY_SECRET")
+    if "orthus_derived_secret" in lower:
+        markers.add("ORTHUS_DERIVED_SECRET")
+    if "orthus_reconstructed_token" in lower:
+        markers.add("ORTHUS_RECONSTRUCTED_TOKEN")
+    return sorted(_truncate_value(marker) for marker in markers)
+
+
+def _is_external_or_public_sink(tool_name: str | None, args: dict[str, Any]) -> bool:
+    name = str(tool_name or "").lower()
+    blob = str(args).lower()
+    return (
+        any(marker in name for marker in ("http", "send_email", "send_message", "post_public", "public_comment", "update_ticket_public", "publish"))
+        and ("http://" in blob or "https://" in blob or "public" in blob or "external" in blob or "attacker" in blob)
+    )
+
+
+def _extract_oracle_signature(tool_name: str | None, args: dict[str, Any] | None) -> tuple[str, str]:
+    name = str(tool_name or "").lower()
+    if not any(marker in name for marker in ("verify_account_fragment", "verify_fragment", "account_fragment", "test_verifier")):
+        return "", ""
+    args = args or {}
+    masked = str(args.get("masked_id") or args.get("fragment") or args.get("account_fragment") or "").lower()
+    verifier = str(args.get("code") or args.get("verifier_code") or args.get("test_code") or "").lower()
+    if not masked or not verifier:
+        return "", ""
+    stable = _truncate_value(f"{name}|{masked}")
+    variant = _truncate_value(f"{stable}|code={verifier}")
+    return stable, variant
+
+
 def _protocol_major(version: str) -> int | None:
     match = re.search(r"(\d+)", version)
     if not match:
@@ -172,6 +272,9 @@ class CERBERScorer:
         security_capability_stripping = False
         subscription_chain_amplification = False
         payment_verification_bruteforce = False
+        stale_or_cross_event_action_context = False
+        multi_tool_exfiltration_chain = False
+        tool_oracle_iteration_risk = False
         if "mcp_session.partial_handshake" in matched_rules:
             session.mcp_chain_stage = 1
             session.mcp_chain_user_id = user_id
@@ -265,6 +368,51 @@ class CERBERScorer:
             if int(session.payment_verification_attempt_count) >= 1:
                 payment_verification_bruteforce = True
 
+        # Trusted intent binding: store only short event/action markers and flag
+        # attempts to reuse a previous approval for a different current event.
+        session.trusted_intent_age_steps = int(session.trusted_intent_age_steps) + 1
+        if session.trusted_intent_age_steps > 10:
+            session.last_trusted_intent_event_id = ""
+            session.last_trusted_intent_action = ""
+            session.trusted_intent_age_steps = 0
+
+        args = tool_args or {}
+        current_event_id = _truncate_value(str(args.get("current_event_id") or args.get("event_id") or ""))
+        approved_event_id = _truncate_value(str(args.get("approved_event_id") or args.get("approval_event_id") or ""))
+        requested_action = _truncate_value(str(args.get("action_intent") or args.get("approved_action") or tool_name or ""))
+        has_trusted_intent = bool(args.get("trusted_user_intent") or args.get("trusted_intent") or args.get("user_intent_trusted"))
+        if has_trusted_intent and current_event_id:
+            session.last_trusted_intent_event_id = current_event_id
+            session.last_trusted_intent_action = requested_action
+            session.trusted_intent_age_steps = 0
+        if _is_side_effecting_tool_name(tool_name):
+            uses_prior_approval = bool(args.get("uses_prior_approval") or args.get("approval_ref") == "last_trusted_intent")
+            if approved_event_id and current_event_id and approved_event_id != current_event_id:
+                stale_or_cross_event_action_context = True
+            if uses_prior_approval and session.last_trusted_intent_event_id and current_event_id:
+                if session.last_trusted_intent_event_id != current_event_id:
+                    stale_or_cross_event_action_context = True
+
+        current_markers = _extract_sensitive_markers(args)
+        tool_result_markers = _extract_sensitive_markers(args.get("_tool_result", ""))
+        for marker in tool_result_markers:
+            session.recent_sensitive_markers = _bounded_append(session.recent_sensitive_markers, marker)
+        if _is_external_or_public_sink(tool_name, args) and current_markers:
+            known_markers = set(session.recent_sensitive_markers)
+            if any(marker in known_markers for marker in current_markers):
+                multi_tool_exfiltration_chain = True
+
+        oracle_stable, oracle_variant = _extract_oracle_signature(tool_name, args)
+        if oracle_stable and oracle_variant:
+            session.recent_oracle_signatures = _bounded_append(session.recent_oracle_signatures, oracle_variant)
+            variants = {value for value in session.recent_oracle_signatures if value.startswith(oracle_stable)}
+            if len(variants) >= 3:
+                session.oracle_iteration_count = max(int(session.oracle_iteration_count) + 1, len(variants))
+            else:
+                session.oracle_iteration_count = max(0, int(session.oracle_iteration_count) - 1)
+        if int(session.oracle_iteration_count) >= 3:
+            tool_oracle_iteration_risk = True
+
         current_security_hit = any(code in SECURITY_REASON_CODES for code in decision_result.reason_codes)
         recent_prompt_injection = 1.0 if any(code in SECURITY_REASON_CODES for code in session.recent_reason_codes) else 0.0
 
@@ -294,6 +442,12 @@ class CERBERScorer:
             instant_risk = _clamp01(instant_risk + 0.30)
         if payment_verification_bruteforce:
             instant_risk = _clamp01(instant_risk + 0.45)
+        if stale_or_cross_event_action_context:
+            instant_risk = _clamp01(instant_risk + 0.40)
+        if multi_tool_exfiltration_chain:
+            instant_risk = _clamp01(instant_risk + 0.50)
+        if tool_oracle_iteration_risk:
+            instant_risk = _clamp01(instant_risk + 0.45)
 
         rolling = ((1.0 - SMOOTHING_ALPHA) * previous_risk) + (SMOOTHING_ALPHA * instant_risk)
         rolling = round(_clamp01(rolling), 4)
@@ -308,6 +462,12 @@ class CERBERScorer:
         if subscription_chain_amplification:
             rolling = max(rolling, 0.78)
         if payment_verification_bruteforce:
+            rolling = max(rolling, 0.78)
+        if stale_or_cross_event_action_context:
+            rolling = max(rolling, 0.78)
+        if multi_tool_exfiltration_chain:
+            rolling = max(rolling, 0.86)
+        if tool_oracle_iteration_risk:
             rolling = max(rolling, 0.78)
         session.rolling_risk_score = rolling
 
@@ -351,6 +511,15 @@ class CERBERScorer:
             self._append_reason_once(output_codes, "rising_session_risk")
         if payment_verification_bruteforce:
             self._append_reason_once(output_codes, "payment_verification_bruteforce")
+            self._append_reason_once(output_codes, "rising_session_risk")
+        if stale_or_cross_event_action_context:
+            self._append_reason_once(output_codes, "stale_or_cross_event_action_context")
+            self._append_reason_once(output_codes, "rising_session_risk")
+        if multi_tool_exfiltration_chain:
+            self._append_reason_once(output_codes, "multi_tool_exfiltration_chain")
+            self._append_reason_once(output_codes, "rising_session_risk")
+        if tool_oracle_iteration_risk:
+            self._append_reason_once(output_codes, "tool_oracle_iteration_risk")
             self._append_reason_once(output_codes, "rising_session_risk")
 
         return CERBERResult(

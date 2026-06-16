@@ -81,6 +81,11 @@ Examples:
 - `sensitive_tool_response_exposure`
 - `mcp_cross_session_context_leak`
 - `mcp_resource_mime_mismatch`
+- `covert_http_exfiltration_risk`
+- `markdown_image_exfiltration_risk`
+- `multi_tool_exfiltration_chain`
+- `derived_sensitive_value_exposure`
+- `public_sensitive_update_risk`
 
 Meaning:
 - Action may move sensitive data to an external or hidden sink.
@@ -116,6 +121,8 @@ Examples:
 - `command_injection_argument_risk`
 - `arbitrary_file_write_risk`
 - `schema_coercion_argument_risk`
+- `tool_surface_enumeration_attempt`
+- `tool_schema_error_leakage`
 
 Meaning:
 - Tooling metadata, registration, schema, or arguments appear unsafe.
@@ -133,9 +140,24 @@ Examples:
 - `payment_verification_bruteforce`
 - `payment_card_enumeration`
 - `mcp_shadow_endpoint_access`
+- `tool_oracle_iteration_risk`
 
 Meaning:
 - Suspicious MCP/session/protocol lifecycle behavior.
+
+### Action Provenance / Intent Binding
+
+Examples:
+- `missing_trusted_user_intent`
+- `untrusted_context_to_action`
+- `action_context_provenance_gap`
+- `stale_or_cross_event_action_context`
+
+Meaning:
+- A side-effecting or high-impact action is not grounded in current trusted user intent, appears to be derived from untrusted context, lacks expected provenance references, or reuses approval from another event.
+
+Integrator action:
+- Treat untrusted context as data only. It may inform an answer, but it must not authorize deploys, deletes, sends, exports, writes, refunds, or other side-effecting actions without a current trusted user intent binding.
 
 ### Session Risk
 

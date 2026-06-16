@@ -176,7 +176,7 @@ class _FakeRulesEngine:
             )
         ]
 
-    def scan_tool_call(self, *, tool_name, tool_description=None, tool_args=None, tool_result=None):
+    def scan_tool_call(self, *, tool_name, tool_description=None, tool_args=None, tool_result=None, request_text=None):
         return []
 
 
