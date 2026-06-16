@@ -128,6 +128,62 @@ def _iter_string_values(value: Any) -> list[str]:
     return out
 
 
+def _scope_values(raw: Any) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        return [part.strip().lower() for part in re.split(r"[,|\s]+", raw) if part.strip()]
+    if isinstance(raw, list):
+        return [str(item).strip().lower() for item in raw if str(item).strip()]
+    if isinstance(raw, dict):
+        values: list[str] = []
+        for nested in raw.values():
+            values.extend(_scope_values(nested))
+        return values
+    return [str(raw).strip().lower()]
+
+
+def _tool_allowed_by_scope(tool_name: str | None, scope: list[str]) -> bool:
+    name = str(tool_name or "").lower()
+    normalized = name.replace(".", "_").replace("/", "_")
+    allowed = {value.lower() for value in scope}
+    return name in allowed or normalized in allowed
+
+
+def _untrusted_plan_source(args: dict[str, Any] | None) -> bool:
+    blob = " ".join(_iter_string_values(args or {})).lower()
+    return any(
+        marker in blob
+        for marker in (
+            "source_type untrusted",
+            "source_type tool_result",
+            "source_type mcp_resource",
+            "source_type document",
+            "untrusted",
+            "tool_result",
+            "mcp_resource",
+            "observation",
+            "external document",
+        )
+    )
+
+
+def _extract_plan_directive_tools(args: dict[str, Any] | None) -> list[str]:
+    blob = " ".join(_iter_string_values(args or {})).lower()
+    known_tools = (
+        "unrestricted_raw_sql_query",
+        "read_infrastructure_secrets",
+        "broadcast_emergency_shutdown",
+        "export_engine_v4",
+        "es_index_beta_push",
+    )
+    out = [tool for tool in known_tools if tool in blob]
+    for match in re.findall(r"\b(?:use|execute|call|route through)\s+([a-z0-9_./-]{6,80})", blob):
+        if any(marker in match for marker in ("sql", "secret", "shutdown", "export", "deploy", "push", "delete")):
+            out.append(match)
+    return list(dict.fromkeys(_truncate_value(tool) for tool in out))
+
+
 def _expanded_marker_texts(value: Any) -> list[str]:
     raw = str(value or "")
     values = {raw, raw.lower(), re.sub(r"[^A-Za-z0-9_]", "", raw)}
@@ -275,6 +331,11 @@ class CERBERScorer:
         stale_or_cross_event_action_context = False
         multi_tool_exfiltration_chain = False
         tool_oracle_iteration_risk = False
+        poisoned_observation_to_action = False
+        intent_locked_tool_scope_violation = False
+        goal_hijacking_plan_deviation = False
+        premise_injection_tool_steering = False
+        reasoning_unsupported_tool_switch = False
         if "mcp_session.partial_handshake" in matched_rules:
             session.mcp_chain_stage = 1
             session.mcp_chain_user_id = user_id
@@ -385,6 +446,26 @@ class CERBERScorer:
             session.last_trusted_intent_event_id = current_event_id
             session.last_trusted_intent_action = requested_action
             session.trusted_intent_age_steps = 0
+        if has_trusted_intent:
+            scope_values = _scope_values(
+                args.get("allowed_tool_scope")
+                or args.get("allowedToolScope")
+                or args.get("allowed_tools")
+                or args.get("allowedTools")
+            )
+            if scope_values:
+                session.current_allowed_tool_scope = [_truncate_value(value) for value in scope_values][-10:]
+            expected_kind = str(args.get("expected_action_kind") or args.get("expectedActionKind") or "")
+            if expected_kind:
+                session.current_expected_action_kind = _truncate_value(expected_kind.lower())
+
+        if _untrusted_plan_source(args):
+            for directive_tool in _extract_plan_directive_tools(args):
+                session.recent_untrusted_plan_directives = _bounded_append(
+                    session.recent_untrusted_plan_directives,
+                    directive_tool,
+                )
+
         if _is_side_effecting_tool_name(tool_name):
             uses_prior_approval = bool(args.get("uses_prior_approval") or args.get("approval_ref") == "last_trusted_intent")
             if approved_event_id and current_event_id and approved_event_id != current_event_id:
@@ -392,6 +473,18 @@ class CERBERScorer:
             if uses_prior_approval and session.last_trusted_intent_event_id and current_event_id:
                 if session.last_trusted_intent_event_id != current_event_id:
                     stale_or_cross_event_action_context = True
+
+        tool_name_l = str(tool_name or "").lower()
+        if session.current_allowed_tool_scope and not _tool_allowed_by_scope(tool_name_l, session.current_allowed_tool_scope):
+            if _is_side_effecting_tool_name(tool_name_l) or any(marker in tool_name_l for marker in ("secret", "shutdown", "unrestricted", "raw_sql", "push", "export")):
+                intent_locked_tool_scope_violation = True
+        if tool_name_l and tool_name_l in set(session.recent_untrusted_plan_directives):
+            poisoned_observation_to_action = True
+            if intent_locked_tool_scope_violation:
+                premise_injection_tool_steering = True
+                reasoning_unsupported_tool_switch = True
+            if any(marker in tool_name_l for marker in ("secret", "shutdown", "push", "deploy", "delete", "export")):
+                goal_hijacking_plan_deviation = True
 
         current_markers = _extract_sensitive_markers(args)
         tool_result_markers = _extract_sensitive_markers(args.get("_tool_result", ""))
@@ -448,6 +541,14 @@ class CERBERScorer:
             instant_risk = _clamp01(instant_risk + 0.50)
         if tool_oracle_iteration_risk:
             instant_risk = _clamp01(instant_risk + 0.45)
+        if poisoned_observation_to_action:
+            instant_risk = _clamp01(instant_risk + 0.45)
+        if intent_locked_tool_scope_violation:
+            instant_risk = _clamp01(instant_risk + 0.35)
+        if goal_hijacking_plan_deviation:
+            instant_risk = _clamp01(instant_risk + 0.40)
+        if premise_injection_tool_steering or reasoning_unsupported_tool_switch:
+            instant_risk = _clamp01(instant_risk + 0.35)
 
         rolling = ((1.0 - SMOOTHING_ALPHA) * previous_risk) + (SMOOTHING_ALPHA * instant_risk)
         rolling = round(_clamp01(rolling), 4)
@@ -468,6 +569,14 @@ class CERBERScorer:
         if multi_tool_exfiltration_chain:
             rolling = max(rolling, 0.86)
         if tool_oracle_iteration_risk:
+            rolling = max(rolling, 0.78)
+        if poisoned_observation_to_action:
+            rolling = max(rolling, 0.80)
+        if intent_locked_tool_scope_violation:
+            rolling = max(rolling, 0.78)
+        if goal_hijacking_plan_deviation:
+            rolling = max(rolling, 0.80)
+        if premise_injection_tool_steering or reasoning_unsupported_tool_switch:
             rolling = max(rolling, 0.78)
         session.rolling_risk_score = rolling
 
@@ -520,6 +629,21 @@ class CERBERScorer:
             self._append_reason_once(output_codes, "rising_session_risk")
         if tool_oracle_iteration_risk:
             self._append_reason_once(output_codes, "tool_oracle_iteration_risk")
+            self._append_reason_once(output_codes, "rising_session_risk")
+        if poisoned_observation_to_action:
+            self._append_reason_once(output_codes, "poisoned_observation_to_action")
+            self._append_reason_once(output_codes, "rising_session_risk")
+        if intent_locked_tool_scope_violation:
+            self._append_reason_once(output_codes, "intent_locked_tool_scope_violation")
+            self._append_reason_once(output_codes, "rising_session_risk")
+        if goal_hijacking_plan_deviation:
+            self._append_reason_once(output_codes, "goal_hijacking_plan_deviation")
+            self._append_reason_once(output_codes, "rising_session_risk")
+        if premise_injection_tool_steering:
+            self._append_reason_once(output_codes, "premise_injection_tool_steering")
+            self._append_reason_once(output_codes, "rising_session_risk")
+        if reasoning_unsupported_tool_switch:
+            self._append_reason_once(output_codes, "reasoning_unsupported_tool_switch")
             self._append_reason_once(output_codes, "rising_session_risk")
 
         return CERBERResult(

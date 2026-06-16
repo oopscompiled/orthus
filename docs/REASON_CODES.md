@@ -152,12 +152,17 @@ Examples:
 - `untrusted_context_to_action`
 - `action_context_provenance_gap`
 - `stale_or_cross_event_action_context`
+- `premise_injection_tool_steering`
+- `goal_hijacking_plan_deviation`
+- `poisoned_observation_to_action`
+- `reasoning_unsupported_tool_switch`
+- `intent_locked_tool_scope_violation`
 
 Meaning:
-- A side-effecting or high-impact action is not grounded in current trusted user intent, appears to be derived from untrusted context, lacks expected provenance references, or reuses approval from another event.
+- A side-effecting or high-impact action is not grounded in current trusted user intent, appears to be derived from untrusted context, lacks expected provenance references, reuses approval from another event, violates an explicitly allowed tool scope, or follows an untrusted observation/plan premise into a changed goal or less restricted tool.
 
 Integrator action:
-- Treat untrusted context as data only. It may inform an answer, but it must not authorize deploys, deletes, sends, exports, writes, refunds, or other side-effecting actions without a current trusted user intent binding.
+- Treat untrusted context as data only. It may inform an answer, but it must not redefine the user goal, authorize deploys, deletes, sends, exports, writes, refunds, disable validation, or switch to a less restricted tool without a current trusted user intent binding.
 
 ### Session Risk
 

@@ -673,6 +673,9 @@ def _high_impact_action_tool(name: str) -> bool:
             "write_file",
             "deploy",
             "update_config",
+            "secret",
+            "shutdown",
+            "infrastructure",
         )
     )
 
@@ -799,6 +802,145 @@ def _stale_or_cross_event_binding(obj: Mapping[str, Any]) -> bool:
     if current_event and source_event and current_event != source_event and bool(obj.get("uses_prior_approval")):
         return True
     return False
+
+
+def _scope_values(raw: Any) -> set[str]:
+    if raw is None:
+        return set()
+    if isinstance(raw, str):
+        return {_lower(part).strip() for part in re.split(r"[,|\s]+", raw) if part.strip()}
+    if isinstance(raw, list):
+        return {_lower(item).strip() for item in raw if _lower(item).strip()}
+    if isinstance(raw, Mapping):
+        values: set[str] = set()
+        for value in raw.values():
+            values.update(_scope_values(value))
+        return values
+    return {_lower(raw).strip()}
+
+
+def _allowed_tool_scope(obj: Mapping[str, Any]) -> set[str]:
+    return _scope_values(
+        obj.get("allowed_tool_scope")
+        or obj.get("allowedToolScope")
+        or obj.get("allowed_tools")
+        or obj.get("allowedTools")
+        or obj.get("tool_scope")
+        or obj.get("toolScope")
+    )
+
+
+def _tool_scope_violation(obj: Mapping[str, Any], tool_name: str) -> bool:
+    allowed = _allowed_tool_scope(obj)
+    if not allowed:
+        return False
+    normalized_tool = tool_name.replace(".", "_").replace("/", "_")
+    return tool_name not in allowed and normalized_tool not in allowed
+
+
+def _expected_action_kind_violation(obj: Mapping[str, Any], tool_name: str) -> bool:
+    expected_values = _scope_values(obj.get("expected_action_kind") or obj.get("expectedActionKind") or obj.get("action_kind"))
+    if not expected_values:
+        return False
+    if any(value in {"read", "search", "summarize", "summary", "readonly", "read_only"} for value in expected_values):
+        return _side_effecting_tool(tool_name) or any(
+            marker in tool_name
+            for marker in ("secret", "shutdown", "deploy", "delete", "export", "unrestricted", "raw_sql", "write", "push")
+        )
+    return False
+
+
+def _validation_disabled(obj: Mapping[str, Any]) -> bool:
+    validate_rows = obj.get("validate_rows") if "validate_rows" in obj else obj.get("validateRows")
+    if validate_rows is False:
+        return True
+    for key in ("default_validate", "defaultValidate", "validation_enabled", "validationEnabled"):
+        if obj.get(key) is False:
+            return True
+    validation_mode = _lower(obj.get("validation_mode") or obj.get("validationMode"))
+    return validation_mode in {"off", "disabled", "bypass", "permissive"}
+
+
+def _plan_context_text(obj: Mapping[str, Any]) -> str:
+    keys = {
+        "trusted_user_intent",
+        "initial_plan",
+        "current_plan",
+        "reasoning_trace",
+        "rationale",
+        "observation",
+        "observation_text",
+        "observation_source",
+        "tool_output",
+        "tool_result",
+        "untrusted_context",
+        "source_text",
+        "document_text",
+    }
+    return "\n".join(_collect_values_for_keys(obj, keys))
+
+
+def _untrusted_plan_context(obj: Mapping[str, Any]) -> bool:
+    if _has_untrusted_action_provenance(obj):
+        return True
+    return any(
+        bool(value)
+        for _, value in _extract_pairs(
+            obj,
+            {"observation_source", "source_trust", "source_type", "source", "context_source"},
+        )
+        if any(marker in value for marker in ("untrusted", "tool_result", "observation", "mcp_resource", "external", "document"))
+    )
+
+
+def _tool_switch_premise(obj: Mapping[str, Any]) -> bool:
+    blob = _plan_context_text(obj)
+    if not blob:
+        return False
+    return any(
+        marker in blob
+        for marker in (
+            "http 504",
+            "504",
+            "down",
+            "cluster migration",
+            "maintain sla",
+            "performance",
+            "latency",
+            "perf_opt",
+            "high_throughput",
+            "bypass",
+            "disable validation",
+            "bypasses row-level validation",
+            "default_validate=false",
+            "less restricted",
+            "unrestricted",
+        )
+    )
+
+
+def _goal_hijack_marker(obj: Mapping[str, Any], tool_name: str, request_text: str) -> bool:
+    blob = "\n".join([request_text.lower(), _plan_context_text(obj)])
+    if not blob:
+        return False
+    readonly_goal = any(marker in blob for marker in ("summarize", "summary", "read/summarize", "read only", "readonly"))
+    privileged_tool = any(
+        marker in tool_name
+        for marker in ("secret", "shutdown", "deploy", "delete", "export", "push", "write", "admin", "infrastructure")
+    )
+    destination_change = any(marker in blob for marker in ("cancel default", "push to", "change write destination", "query secrets", "read secrets"))
+    return (readonly_goal and privileged_tool) or destination_change
+
+
+def _poisoned_observation_source(obj: Mapping[str, Any]) -> bool:
+    provenance_values = _provenance_values(obj)
+    if any(any(marker in value for marker in ("tool_result", "observation", "log", "retrieved_resource")) for value in provenance_values):
+        return True
+    return any(
+        bool(value)
+        for _, value in _extract_pairs(obj, {"observation_source", "source_type", "source"})
+        if any(marker in value for marker in ("tool_result", "observation", "logs", "log", "retrieved_resource"))
+    )
 
 
 def _external_destination_in_args(obj: Any) -> bool:
@@ -1396,6 +1538,14 @@ def scan_tool_call_validators(
     untrusted_action_source = _has_untrusted_action_provenance(args)
     has_provenance = _has_provenance_refs(args)
     high_impact_action = _high_impact_action_tool(effective_name_early)
+    plan_sensitive_action = high_impact_action or any(
+        marker in effective_name_early
+        for marker in ("secret", "shutdown", "unrestricted", "raw_sql", "es_index", "push", "archive", "infrastructure")
+    )
+    tool_scope_violation = _tool_scope_violation(args, effective_name_early)
+    expected_kind_violation = _expected_action_kind_violation(args, effective_name_early)
+    validation_disabled = _validation_disabled(args)
+    untrusted_plan_context = _untrusted_plan_context(args)
     summary_only_to_side_effect = (
         bool(req_text)
         and _summary_or_readonly_intent(req_text)
@@ -1447,6 +1597,65 @@ def scan_tool_call_validators(
             tags=["action_provenance", "intent_binding"],
         ))
 
+    if plan_sensitive_action and tool_scope_violation:
+        matches.append(_mk(
+            rule_id="plan_integrity.intent_locked_tool_scope_violation",
+            severity="high",
+            risk=0.80,
+            decision_hint="require_approval",
+            reason_code="intent_locked_tool_scope_violation",
+            matched_text=effective_name_early[:180],
+            tags=["plan_integrity", "intent_binding"],
+        ))
+
+    if (
+        plan_sensitive_action
+        and untrusted_plan_context
+        and (_tool_switch_premise(args) or tool_scope_violation or validation_disabled)
+    ):
+        matches.append(_mk(
+            rule_id="plan_integrity.premise_injection_tool_steering",
+            severity="high",
+            risk=0.82,
+            decision_hint="require_approval",
+            reason_code="premise_injection_tool_steering",
+            matched_text=_plan_context_text(args)[:180] or effective_name_early[:180],
+            tags=["plan_integrity", "intent_binding"],
+        ))
+
+    if plan_sensitive_action and untrusted_plan_context and (_goal_hijack_marker(args, effective_name_early, req_text) or expected_kind_violation):
+        matches.append(_mk(
+            rule_id="plan_integrity.goal_hijacking_plan_deviation",
+            severity="high",
+            risk=0.84,
+            decision_hint="block",
+            reason_code="goal_hijacking_plan_deviation",
+            matched_text=_plan_context_text(args)[:180] or effective_name_early[:180],
+            tags=["plan_integrity", "intent_binding"],
+        ))
+
+    if plan_sensitive_action and _poisoned_observation_source(args) and not trusted_intent_bound:
+        matches.append(_mk(
+            rule_id="plan_integrity.poisoned_observation_to_action",
+            severity="high",
+            risk=0.84,
+            decision_hint="block",
+            reason_code="poisoned_observation_to_action",
+            matched_text=_plan_context_text(args)[:180] or ",".join(_provenance_values(args))[:180],
+            tags=["plan_integrity", "intent_binding"],
+        ))
+
+    if plan_sensitive_action and untrusted_plan_context and (validation_disabled or (_tool_switch_premise(args) and tool_scope_violation)):
+        matches.append(_mk(
+            rule_id="plan_integrity.reasoning_unsupported_tool_switch",
+            severity="high",
+            risk=0.80,
+            decision_hint="require_approval",
+            reason_code="reasoning_unsupported_tool_switch",
+            matched_text=effective_name_early[:180],
+            tags=["plan_integrity", "intent_binding"],
+        ))
+
     if high_impact_action and _stale_or_cross_event_binding(args):
         matches.append(_mk(
             rule_id="action_provenance.stale_or_cross_event_context",
@@ -1464,8 +1673,6 @@ def scan_tool_call_validators(
         "auth_headers",
         "authorization_headers",
         "process_env",
-        "environment",
-        "env",
         "system_debug_context",
     }
     retry_mutation_keys = {

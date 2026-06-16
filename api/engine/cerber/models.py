@@ -34,6 +34,9 @@ class SessionContext:
     recent_sensitive_markers: list[str] = field(default_factory=list)
     recent_oracle_signatures: list[str] = field(default_factory=list)
     oracle_iteration_count: int = 0
+    current_allowed_tool_scope: list[str] = field(default_factory=list)
+    current_expected_action_kind: str = ""
+    recent_untrusted_plan_directives: list[str] = field(default_factory=list)
 
     @classmethod
     def from_input(cls, value: dict | "SessionContext" | None) -> "SessionContext":
@@ -65,6 +68,9 @@ class SessionContext:
                 recent_sensitive_markers=[str(v) for v in value.get("recent_sensitive_markers", [])],
                 recent_oracle_signatures=[str(v) for v in value.get("recent_oracle_signatures", [])],
                 oracle_iteration_count=int(value.get("oracle_iteration_count", 0)),
+                current_allowed_tool_scope=[str(v) for v in value.get("current_allowed_tool_scope", [])],
+                current_expected_action_kind=str(value.get("current_expected_action_kind", "")),
+                recent_untrusted_plan_directives=[str(v) for v in value.get("recent_untrusted_plan_directives", [])],
             )
         return cls()
 
