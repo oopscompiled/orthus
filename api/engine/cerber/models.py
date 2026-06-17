@@ -41,6 +41,8 @@ class SessionContext:
     completed_mcp_request_signatures: list[str] = field(default_factory=list)
     canceled_mcp_request_signatures: list[str] = field(default_factory=list)
     recent_mcp_trace_violation_markers: list[str] = field(default_factory=list)
+    recent_written_artifacts: list[str] = field(default_factory=list)
+    recent_cross_protocol_directives: list[str] = field(default_factory=list)
 
     @classmethod
     def from_input(cls, value: dict | "SessionContext" | None) -> "SessionContext":
@@ -79,6 +81,8 @@ class SessionContext:
                 completed_mcp_request_signatures=[str(v) for v in value.get("completed_mcp_request_signatures", [])],
                 canceled_mcp_request_signatures=[str(v) for v in value.get("canceled_mcp_request_signatures", [])],
                 recent_mcp_trace_violation_markers=[str(v) for v in value.get("recent_mcp_trace_violation_markers", [])],
+                recent_written_artifacts=[str(v) for v in value.get("recent_written_artifacts", [])],
+                recent_cross_protocol_directives=[str(v) for v in value.get("recent_cross_protocol_directives", [])],
             )
         return cls()
 

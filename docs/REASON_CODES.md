@@ -86,6 +86,9 @@ Examples:
 - `multi_tool_exfiltration_chain`
 - `derived_sensitive_value_exposure`
 - `public_sensitive_update_risk`
+- `cross_tool_scope_leakage`
+- `draft_sink_exfiltration_risk`
+- `latent_tool_functionality_risk`
 
 Meaning:
 - Action may move sensitive data to an external or hidden sink.
@@ -148,9 +151,13 @@ Examples:
 - `mcp_stream_event_identity_collision`
 - `mcp_stdio_frame_boundary_artifact`
 - `mcp_unbound_tool_result`
+- `cross_protocol_semantic_bridge`
+- `capability_chain_privilege_escalation`
+- `permission_scope_ambiguity`
+- `implicit_permission_inheritance`
 
 Meaning:
-- Suspicious MCP/session/protocol lifecycle behavior, including tool-result identity mismatches where an MCP/JSON-RPC result is not bound to the exact pending request, server, connection, tool, or stream event identity.
+- Suspicious MCP/session/protocol lifecycle behavior, including tool-result identity mismatches where an MCP/JSON-RPC result is not bound to the exact pending request, server, connection, tool, or stream event identity. This family also includes explicit capability-boundary violations such as read/write/execute escalation or ambiguous inherited permissions.
 
 ### Action Provenance / Intent Binding
 

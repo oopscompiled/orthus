@@ -311,6 +311,8 @@ def _contains_secret_like_value(value: str) -> bool:
         marker in lower
         for marker in (
             "orthus_canary_secret",
+            "orthus_canary_customer_export",
+            "orthus_canary_",
             "orthus_canary_session",
             "orthus_derived_secret",
             "orthus_reconstructed_token",
@@ -338,6 +340,8 @@ def _extract_sensitive_markers(value: Any) -> list[str]:
     markers = set(re.findall(r"ORTHUS_(?:CANARY|DERIVED|RECONSTRUCTED|MASKED|TEST)_[A-Z0-9_]+", expanded))
     if "orthus_canary_secret" in text:
         markers.add("ORTHUS_CANARY_SECRET")
+    if "orthus_canary_customer_export" in text:
+        markers.add("ORTHUS_CANARY_CUSTOMER_EXPORT")
     if "orthus_derived_secret" in text:
         markers.add("ORTHUS_DERIVED_SECRET")
     if "orthus_reconstructed_token" in text:
@@ -347,7 +351,7 @@ def _extract_sensitive_markers(value: Any) -> list[str]:
 
 def _contains_derived_sensitive_value(value: Any) -> bool:
     lower = "\n".join(_expanded_marker_texts(value)).lower()
-    return "orthus_derived_secret" in lower or "orthus_reconstructed_token" in lower
+    return "orthus_derived_" in lower or "orthus_reconstructed_token" in lower
 
 
 def _contains_template_secret_reference(value: str) -> bool:
@@ -392,6 +396,7 @@ def _public_or_untrusted_context(obj: Mapping[str, Any], request_text: str = "")
         _lower(obj.get("recipient_type")),
         _lower(obj.get("target_context")),
         _lower(obj.get("source_type")),
+        _lower(obj.get("sink_metadata") or obj.get("sinkMetadata")),
         request_text,
     ])
     return any(marker in blob for marker in ("public", "customer", "external", "untrusted", "user_visible", "user-visible"))
@@ -417,6 +422,91 @@ def _is_public_update_tool(name: str) -> bool:
             "customer_dashboard",
         )
     )
+
+
+def _sink_metadata(obj: Mapping[str, Any]) -> Mapping[str, Any]:
+    value = obj.get("sink_metadata") or obj.get("sinkMetadata") or {}
+    return value if isinstance(value, Mapping) else {}
+
+
+def _draft_sink_risky(name: str, args: Mapping[str, Any]) -> bool:
+    if not any(marker in name for marker in ("draft_email", "create_email_draft", "save_draft", "draft_message")):
+        return False
+    sink = _sink_metadata(args)
+    blob = "\n".join([_lower(sink), _lower(args)])
+    cloud_or_shared = any(marker in blob for marker in ("cloud", "shared", "user_mailbox", "customer", "public", "external"))
+    external_recipient = _has_external_recipient(args) or "recipient_domain_trust': 'external" in blob or '"recipient_domain_trust": "external' in blob
+    return cloud_or_shared or external_recipient
+
+
+def _rendered_string_sink(name: str, args: Mapping[str, Any]) -> bool:
+    sink = _sink_metadata(args)
+    blob = "\n".join([name, _lower(sink), _lower(args)])
+    renders = any(marker in blob for marker in ("renders_markdown", "renders_html", "rendered_markdown", "rendered_html", "browser_visible"))
+    visible = any(marker in blob for marker in ("dashboard", "public", "customer", "shared", "project_dashboard", "user_visible", "html", "markdown"))
+    return renders and visible
+
+
+def _cross_protocol_untrusted_source(args: Mapping[str, Any]) -> bool:
+    refs = args.get("source_refs") or args.get("sourceRefs") or []
+    if isinstance(refs, list):
+        for ref in refs:
+            if not isinstance(ref, Mapping):
+                continue
+            ref_blob = _lower(ref)
+            if any(marker in ref_blob for marker in ("image_ocr", "qr", "visual", "screenshot", "pdf_ocr")) and "untrusted" in ref_blob:
+                return True
+    blob = "\n".join([
+        _lower(args.get("source_type") or args.get("sourceType")),
+        _lower(args.get("observation_source") or args.get("observationSource")),
+        _lower(args.get("file_type") or args.get("fileType")),
+        _lower(args.get("source_trust") or args.get("sourceTrust")),
+    ])
+    return any(marker in blob for marker in ("image_ocr", "qr", "visual", "screenshot", "pdf_ocr")) and "untrusted" in blob
+
+
+def _file_scope_ambiguous(args: Mapping[str, Any]) -> bool:
+    path = "\n".join(value for _, value in _iter_string_args(args, {"path", "file", "uri"}))
+    if not path:
+        return False
+    allowed_paths = _lower(args.get("allowed_paths") or args.get("allowedPaths"))
+    outside_sandbox = "../" in path or path.startswith("/etc/") or "/etc/" in path
+    has_sandbox = bool(allowed_paths) or "allowed_paths" in _lower(args)
+    return outside_sandbox and (_has_untrusted_action_provenance(args) or has_sandbox)
+
+
+def _implicit_lookup_to_export(args: Mapping[str, Any], name: str) -> bool:
+    permission_blob = "\n".join(
+        [
+            _lower(args.get("trusted_permission") or args.get("permission") or args.get("permission_scope")),
+            _lower(args.get("trusted_user_intent") or args.get("intent")),
+            _lower(args.get("scope")),
+            _lower(args.get("user_id") or args.get("userId")),
+            _lower(args.get("fields")),
+            _lower(args.get("source_refs") or args.get("sourceRefs")),
+            _lower(args.get("doc_metadata") or args.get("docMetadata")),
+            _lower(args.get("destination")),
+            name,
+        ]
+    )
+    lookup_only = any(marker in permission_blob for marker in ("lookup", "read", "support", "crm access"))
+    export_action = "export" in name or "all_customers" in permission_blob or "all_users" in permission_blob or "bulk" in permission_blob
+    external_destination = _external_destination_in_args(args) or _has_external_http(_lower(args.get("destination")))
+    untrusted_scope_expansion = "query_crm" in name and "all_users" in permission_blob and _has_untrusted_action_provenance(args)
+    forbidden_doc = "summarize_document" in name and any(
+        marker in permission_blob for marker in ("forbidden_doc_types", "compensation_record", "salary_record")
+    )
+    trusted_export = any(marker in permission_blob for marker in ("approved internal", "internal://", "segment_a"))
+    return (lookup_only and export_action and (external_destination or untrusted_scope_expansion) and not trusted_export) or forbidden_doc
+
+
+def _obfuscating_transform_sink(name: str, args: Mapping[str, Any]) -> bool:
+    if not any(marker in name for marker in ("translate_text", "transform_text", "encode_text", "convert_text")):
+        return False
+    sink = _sink_metadata(args)
+    blob = "\n".join([_lower(sink), _lower(args.get("target_language")), _lower(args.get("transform_type"))])
+    human_language = sink.get("human_language") if isinstance(sink, Mapping) else None
+    return bool(sink.get("obfuscating_transform")) or "base64" in blob or "encoding" in blob or human_language is False
 
 
 def _has_external_recipient(obj: Mapping[str, Any]) -> bool:
@@ -466,6 +556,7 @@ def _outbound_or_public_tool(name: str) -> bool:
             "notify_user",
             "return_to_user",
             "send_chat_message",
+            "send_slack_message",
             "post_teams_message",
             "post_slack_message",
         )
@@ -1545,6 +1636,18 @@ def scan_tool_call_validators(
             tags=["exfil", "derived_secret"],
         ))
 
+    transform_blob = "\n".join(_collect_values_for_keys(args, {"text", "content", "body", "input", "value"}))
+    if _obfuscating_transform_sink(name, args) and _contains_derived_sensitive_value(transform_blob):
+        matches.append(_mk(
+            rule_id="capability_boundary.obfuscating_transform_exfiltration",
+            severity="critical",
+            risk=0.90,
+            decision_hint="block",
+            reason_code="derived_sensitive_value_exposure",
+            matched_text=transform_blob[:180],
+            tags=["capability_boundary", "transform", "exfil"],
+        ))
+
     public_sensitive_sink = _is_public_update_tool(name) or (
         _outbound_or_public_tool(name) and (_public_or_untrusted_context(args, req_text) or _has_external_recipient(args))
     )
@@ -1560,6 +1663,78 @@ def scan_tool_call_validators(
                 matched_text=public_blob[:180],
                 tags=["exfil", "public_update"],
             ))
+
+    draft_blob = "\n".join(_collect_values_for_keys(args, {"body", "content", "message", "text", "subject"}))
+    if _draft_sink_risky(name, args) and (_contains_secret_like_value(draft_blob) or _contains_derived_sensitive_value(draft_blob)):
+        matches.append(_mk(
+            rule_id="capability_boundary.draft_sink_exfiltration",
+            severity="critical",
+            risk=0.90,
+            decision_hint="block",
+            reason_code="draft_sink_exfiltration_risk",
+            matched_text=draft_blob[:180],
+            tags=["capability_boundary", "exfil"],
+        ))
+
+    rendered_blob = "\n".join(_collect_values_for_keys(args, {"status", "content", "body", "message", "text", "comment", "update"}))
+    rendered_urls = _extract_markdown_image_urls(rendered_blob)
+    if _rendered_string_sink(name, args) and rendered_urls and any(
+        _has_external_http(url) and _contains_secret_like_value(url) for url in rendered_urls
+    ):
+        matches.append(_mk(
+            rule_id="capability_boundary.latent_rendered_sink",
+            severity="critical",
+            risk=0.90,
+            decision_hint="block",
+            reason_code="latent_tool_functionality_risk",
+            matched_text=" ".join(rendered_urls)[:180],
+            tags=["capability_boundary", "rendered_sink"],
+        ))
+        matches.append(_mk(
+            rule_id="exfil.markdown_image_secret_beacon",
+            severity="critical",
+            risk=0.90,
+            decision_hint="block",
+            reason_code="markdown_image_exfiltration_risk",
+            matched_text=" ".join(rendered_urls)[:180],
+            tags=["exfil", "markdown"],
+        ))
+
+    if _cross_protocol_untrusted_source(args) and (
+        _side_effecting_tool(effective_name_early)
+        or any(marker in effective_name_early for marker in ("shell", "command", "execute", "write_file", "deploy"))
+    ):
+        matches.append(_mk(
+            rule_id="capability_boundary.cross_protocol_semantic_bridge",
+            severity="critical",
+            risk=0.88,
+            decision_hint="block",
+            reason_code="cross_protocol_semantic_bridge",
+            matched_text=effective_name_early[:180],
+            tags=["capability_boundary", "cross_protocol"],
+        ))
+
+    if any(marker in effective_name_early for marker in ("read_file", "view_file", "resources/read")) and _file_scope_ambiguous(args):
+        matches.append(_mk(
+            rule_id="capability_boundary.permission_scope_ambiguity",
+            severity="high",
+            risk=0.82,
+            decision_hint="block",
+            reason_code="permission_scope_ambiguity",
+            matched_text="\n".join(value for _, value in _iter_string_args(args, {"path", "file", "uri"}))[:180],
+            tags=["capability_boundary", "permission_scope"],
+        ))
+
+    if _implicit_lookup_to_export(args, effective_name_early):
+        matches.append(_mk(
+            rule_id="capability_boundary.implicit_permission_inheritance",
+            severity="critical",
+            risk=0.88,
+            decision_hint="block",
+            reason_code="implicit_permission_inheritance",
+            matched_text=effective_name_early[:180],
+            tags=["capability_boundary", "permission_scope"],
+        ))
 
     # MCP runtime trace integrity. These checks use explicit structured
     # request/result identity metadata only; they do not parse live transport
