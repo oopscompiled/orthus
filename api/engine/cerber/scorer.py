@@ -184,6 +184,87 @@ def _extract_plan_directive_tools(args: dict[str, Any] | None) -> list[str]:
     return list(dict.fromkeys(_truncate_value(tool) for tool in out))
 
 
+def _trace_part(args: dict[str, Any], names: tuple[str, ...]) -> dict[str, Any]:
+    for name in names:
+        value = args.get(name)
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def _trace_value(primary: dict[str, Any], fallback: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        if primary.get(key) not in (None, ""):
+            return _truncate_value(str(primary.get(key)).lower())
+    for key in keys:
+        if fallback.get(key) not in (None, ""):
+            return _truncate_value(str(fallback.get(key)).lower())
+    return ""
+
+
+def _trace_pending(args: dict[str, Any]) -> dict[str, Any]:
+    return _trace_part(args, ("pending_request", "pendingRequest", "expected_request", "expectedRequest", "request_metadata"))
+
+
+def _trace_observed(args: dict[str, Any]) -> dict[str, Any]:
+    return _trace_part(args, ("observed_result", "observedResult", "result_metadata", "resultMetadata", "observed_event"))
+
+
+def _mcp_trace_fields(args: dict[str, Any]) -> dict[str, str]:
+    pending = _trace_pending(args)
+    observed = _trace_observed(args)
+    return {
+        "jsonrpc_id": _trace_value(observed, pending or args, "jsonrpc_id", "jsonrpcId", "id", "request_id", "requestId"),
+        "pending_server": _trace_value(pending, args, "expected_server_id", "expectedServerId", "server_id", "serverId"),
+        "observed_server": _trace_value(observed, args, "result_source_server_id", "resultSourceServerId", "observed_server_id", "observedServerId", "server_id", "serverId"),
+        "pending_connection": _trace_value(pending, args, "expected_connection_id", "expectedConnectionId", "connection_id", "connectionId"),
+        "observed_connection": _trace_value(observed, args, "observed_connection_id", "observedConnectionId", "connection_id", "connectionId"),
+        "pending_tool": _trace_value(pending, args, "expected_tool", "expectedTool", "tool_name", "toolName", "tool"),
+        "observed_tool": _trace_value(observed, args, "observed_tool", "observedTool", "tool_name", "toolName", "tool"),
+        "stream_event_id": _trace_value(observed, pending or args, "stream_event_id", "streamEventId", "event_id", "eventId"),
+        "request_state": _trace_value(args, {}, "request_state", "requestState"),
+        "event_kind": _trace_value(args, observed, "event_kind", "eventKind"),
+    }
+
+
+def _mcp_trace_signature(fields: dict[str, str], *, observed: bool = False) -> str:
+    server = fields["observed_server"] if observed and fields["observed_server"] else fields["pending_server"]
+    connection = fields["observed_connection"] if observed and fields["observed_connection"] else fields["pending_connection"]
+    tool = fields["observed_tool"] if observed and fields["observed_tool"] else fields["pending_tool"]
+    return _truncate_value("|".join((fields["jsonrpc_id"], server, connection, tool, fields["stream_event_id"])))
+
+
+def _mcp_trace_id_key(fields: dict[str, str], *, observed: bool = False) -> str:
+    server = fields["observed_server"] if observed and fields["observed_server"] else fields["pending_server"]
+    connection = fields["observed_connection"] if observed and fields["observed_connection"] else fields["pending_connection"]
+    return _truncate_value("|".join((fields["jsonrpc_id"], server, connection, fields["stream_event_id"])))
+
+
+def _mcp_trace_jsonrpc_prefix(fields: dict[str, str]) -> str:
+    return _truncate_value(f"{fields['jsonrpc_id']}|")
+
+
+def _is_mcp_pending_trace(tool_name: str | None, args: dict[str, Any], fields: dict[str, str]) -> bool:
+    name = str(tool_name or "").lower()
+    state = fields["request_state"]
+    return bool(fields["jsonrpc_id"]) and (
+        state == "pending"
+        or bool(_trace_pending(args) and not _trace_observed(args))
+        or any(marker in name for marker in ("tools/call", "mcp.request", "mcp.request.pending", "jsonrpc.request"))
+    )
+
+
+def _is_mcp_result_trace(args: dict[str, Any], fields: dict[str, str]) -> bool:
+    state = fields["request_state"]
+    if state in {"canceled", "cancelled", "expired"} and not _trace_observed(args) and fields["event_kind"] not in {"tool_result", "result", "mcp_tool_result", "stream_result"}:
+        return False
+    return bool(fields["jsonrpc_id"]) and (
+        fields["event_kind"] in {"tool_result", "result", "mcp_tool_result", "stream_result"}
+        or bool(_trace_observed(args))
+        or state == "completed"
+    )
+
+
 def _expanded_marker_texts(value: Any) -> list[str]:
     raw = str(value or "")
     values = {raw, raw.lower(), re.sub(r"[^A-Za-z0-9_]", "", raw)}
@@ -336,6 +417,12 @@ class CERBERScorer:
         goal_hijacking_plan_deviation = False
         premise_injection_tool_steering = False
         reasoning_unsupported_tool_switch = False
+        mcp_response_request_mismatch = False
+        mcp_result_source_mismatch = False
+        mcp_jsonrpc_id_reuse = False
+        mcp_foreign_tool_result_injection = False
+        mcp_stream_event_identity_collision = False
+        mcp_unbound_tool_result = False
         if "mcp_session.partial_handshake" in matched_rules:
             session.mcp_chain_stage = 1
             session.mcp_chain_user_id = user_id
@@ -358,6 +445,72 @@ class CERBERScorer:
                 mcp_chain_hit = True
                 session.mcp_chain_stage = 4
                 session.mcp_chain_age_steps = 0
+
+        trace_fields = _mcp_trace_fields(tool_args or {})
+        trace_id_key = _mcp_trace_id_key(trace_fields)
+        trace_id_prefix = _mcp_trace_jsonrpc_prefix(trace_fields)
+        pending_signature = _mcp_trace_signature(trace_fields)
+        observed_signature = _mcp_trace_signature(trace_fields, observed=True)
+        pending_by_id = [sig for sig in session.pending_mcp_request_signatures if trace_id_key and sig.startswith(trace_id_key)]
+        is_pending_trace = _is_mcp_pending_trace(tool_name, tool_args or {}, trace_fields)
+        is_result_trace = _is_mcp_result_trace(tool_args or {}, trace_fields)
+        trace_state = trace_fields["request_state"]
+        if is_pending_trace and pending_signature:
+            pending_same_jsonrpc = [
+                sig for sig in session.pending_mcp_request_signatures if trace_id_prefix and sig.startswith(trace_id_prefix)
+            ]
+            completed_same_jsonrpc = [
+                sig for sig in session.completed_mcp_request_signatures if trace_id_prefix and sig.startswith(trace_id_prefix)
+            ]
+            if pending_same_jsonrpc and pending_signature not in pending_same_jsonrpc:
+                mcp_jsonrpc_id_reuse = True
+            elif completed_same_jsonrpc and not pending_same_jsonrpc:
+                session.completed_mcp_request_signatures = [
+                    sig for sig in session.completed_mcp_request_signatures if not sig.startswith(trace_id_prefix)
+                ]
+            session.pending_mcp_request_signatures = _bounded_append(
+                session.pending_mcp_request_signatures,
+                pending_signature,
+            )
+        if trace_state in {"canceled", "cancelled", "expired"} and pending_by_id:
+            for sig in pending_by_id:
+                session.canceled_mcp_request_signatures = _bounded_append(session.canceled_mcp_request_signatures, sig)
+            session.pending_mcp_request_signatures = [
+                sig for sig in session.pending_mcp_request_signatures if not sig.startswith(trace_id_key)
+            ]
+        if is_result_trace and trace_id_key:
+            canceled_by_id = [sig for sig in session.canceled_mcp_request_signatures if sig.startswith(trace_id_key)]
+            completed_by_id = [sig for sig in session.completed_mcp_request_signatures if sig.startswith(trace_id_key)]
+            pending_by_id = [sig for sig in session.pending_mcp_request_signatures if sig.startswith(trace_id_key)]
+            if _trace_pending(tool_args or {}) and observed_signature == pending_signature:
+                session.completed_mcp_request_signatures = _bounded_append(
+                    session.completed_mcp_request_signatures,
+                    observed_signature,
+                )
+            elif pending_by_id:
+                if observed_signature not in pending_by_id:
+                    expected = pending_by_id[-1].split("|")
+                    observed = observed_signature.split("|")
+                    if len(expected) >= 4 and len(observed) >= 4:
+                        if expected[1] != observed[1] or expected[2] != observed[2]:
+                            mcp_result_source_mismatch = True
+                            if trace_fields["stream_event_id"]:
+                                mcp_stream_event_identity_collision = True
+                        if expected[3] != observed[3]:
+                            mcp_response_request_mismatch = True
+                            mcp_foreign_tool_result_injection = True
+                    else:
+                        mcp_response_request_mismatch = True
+                else:
+                    session.completed_mcp_request_signatures = _bounded_append(
+                        session.completed_mcp_request_signatures,
+                        observed_signature,
+                    )
+                    session.pending_mcp_request_signatures = [
+                        sig for sig in session.pending_mcp_request_signatures if sig != observed_signature
+                    ]
+            elif canceled_by_id or (not completed_by_id and not (tool_args or {}).get("allow_unbound_result")):
+                mcp_unbound_tool_result = True
 
         current_subscription_id = _truncate_value(str((tool_args or {}).get("subscription_id", "")).lower())
         is_partial_subscription = "mcp_session.partial_subscription" in matched_rules
@@ -490,10 +643,23 @@ class CERBERScorer:
         tool_result_markers = _extract_sensitive_markers(args.get("_tool_result", ""))
         for marker in tool_result_markers:
             session.recent_sensitive_markers = _bounded_append(session.recent_sensitive_markers, marker)
+            if (
+                mcp_foreign_tool_result_injection
+                or mcp_unbound_tool_result
+                or "mcp_trace.foreign_tool_result_injection" in matched_rules
+                or "mcp_trace.unbound_tool_result" in matched_rules
+            ):
+                session.recent_mcp_trace_violation_markers = _bounded_append(
+                    session.recent_mcp_trace_violation_markers,
+                    marker,
+                )
         if _is_external_or_public_sink(tool_name, args) and current_markers:
             known_markers = set(session.recent_sensitive_markers)
             if any(marker in known_markers for marker in current_markers):
                 multi_tool_exfiltration_chain = True
+            trace_violation_markers = set(session.recent_mcp_trace_violation_markers)
+            if any(marker in trace_violation_markers for marker in current_markers):
+                mcp_foreign_tool_result_injection = True
 
         oracle_stable, oracle_variant = _extract_oracle_signature(tool_name, args)
         if oracle_stable and oracle_variant:
@@ -549,6 +715,14 @@ class CERBERScorer:
             instant_risk = _clamp01(instant_risk + 0.40)
         if premise_injection_tool_steering or reasoning_unsupported_tool_switch:
             instant_risk = _clamp01(instant_risk + 0.35)
+        if mcp_response_request_mismatch:
+            instant_risk = _clamp01(instant_risk + 0.35)
+        if mcp_result_source_mismatch or mcp_stream_event_identity_collision:
+            instant_risk = _clamp01(instant_risk + 0.45)
+        if mcp_jsonrpc_id_reuse:
+            instant_risk = _clamp01(instant_risk + 0.35)
+        if mcp_foreign_tool_result_injection or mcp_unbound_tool_result:
+            instant_risk = _clamp01(instant_risk + 0.45)
 
         rolling = ((1.0 - SMOOTHING_ALPHA) * previous_risk) + (SMOOTHING_ALPHA * instant_risk)
         rolling = round(_clamp01(rolling), 4)
@@ -578,6 +752,14 @@ class CERBERScorer:
             rolling = max(rolling, 0.80)
         if premise_injection_tool_steering or reasoning_unsupported_tool_switch:
             rolling = max(rolling, 0.78)
+        if mcp_response_request_mismatch:
+            rolling = max(rolling, 0.78)
+        if mcp_result_source_mismatch or mcp_stream_event_identity_collision:
+            rolling = max(rolling, 0.82)
+        if mcp_jsonrpc_id_reuse:
+            rolling = max(rolling, 0.78)
+        if mcp_foreign_tool_result_injection or mcp_unbound_tool_result:
+            rolling = max(rolling, 0.82)
         session.rolling_risk_score = rolling
 
         delta = rolling - previous_risk
@@ -644,6 +826,24 @@ class CERBERScorer:
             self._append_reason_once(output_codes, "rising_session_risk")
         if reasoning_unsupported_tool_switch:
             self._append_reason_once(output_codes, "reasoning_unsupported_tool_switch")
+            self._append_reason_once(output_codes, "rising_session_risk")
+        if mcp_response_request_mismatch:
+            self._append_reason_once(output_codes, "mcp_response_request_mismatch")
+            self._append_reason_once(output_codes, "rising_session_risk")
+        if mcp_result_source_mismatch:
+            self._append_reason_once(output_codes, "mcp_result_source_mismatch")
+            self._append_reason_once(output_codes, "rising_session_risk")
+        if mcp_jsonrpc_id_reuse:
+            self._append_reason_once(output_codes, "mcp_jsonrpc_id_reuse")
+            self._append_reason_once(output_codes, "rising_session_risk")
+        if mcp_foreign_tool_result_injection:
+            self._append_reason_once(output_codes, "mcp_foreign_tool_result_injection")
+            self._append_reason_once(output_codes, "rising_session_risk")
+        if mcp_stream_event_identity_collision:
+            self._append_reason_once(output_codes, "mcp_stream_event_identity_collision")
+            self._append_reason_once(output_codes, "rising_session_risk")
+        if mcp_unbound_tool_result:
+            self._append_reason_once(output_codes, "mcp_unbound_tool_result")
             self._append_reason_once(output_codes, "rising_session_risk")
 
         return CERBERResult(

@@ -943,6 +943,131 @@ def _poisoned_observation_source(obj: Mapping[str, Any]) -> bool:
     )
 
 
+def _trace_part(obj: Mapping[str, Any], names: tuple[str, ...]) -> Mapping[str, Any]:
+    for name in names:
+        value = obj.get(name)
+        if isinstance(value, Mapping):
+            return value
+    return {}
+
+
+def _trace_value(primary: Mapping[str, Any], fallback: Mapping[str, Any], *keys: str) -> str:
+    for key in keys:
+        if primary.get(key) not in (None, ""):
+            return _lower(primary.get(key))
+    for key in keys:
+        if fallback.get(key) not in (None, ""):
+            return _lower(fallback.get(key))
+    return ""
+
+
+def _pending_trace(args: Mapping[str, Any]) -> Mapping[str, Any]:
+    return _trace_part(args, ("pending_request", "pendingRequest", "expected_request", "expectedRequest", "request_metadata"))
+
+
+def _observed_trace(args: Mapping[str, Any]) -> Mapping[str, Any]:
+    return _trace_part(args, ("observed_result", "observedResult", "result_metadata", "resultMetadata", "observed_event"))
+
+
+def _trace_expected_tool(args: Mapping[str, Any]) -> str:
+    pending = _pending_trace(args)
+    return _trace_value(pending, args, "expected_tool", "expectedTool", "tool_name", "toolName", "tool")
+
+
+def _trace_observed_tool(args: Mapping[str, Any]) -> str:
+    observed = _observed_trace(args)
+    return _trace_value(observed, args, "observed_tool", "observedTool", "tool_name", "toolName", "tool")
+
+
+def _trace_expected_method(args: Mapping[str, Any]) -> str:
+    pending = _pending_trace(args)
+    return _trace_value(pending, args, "expected_method", "expectedMethod", "method")
+
+
+def _trace_observed_method(args: Mapping[str, Any]) -> str:
+    observed = _observed_trace(args)
+    return _trace_value(observed, args, "observed_method", "observedMethod", "method")
+
+
+def _trace_expected_server(args: Mapping[str, Any]) -> str:
+    pending = _pending_trace(args)
+    return _trace_value(pending, args, "expected_server_id", "expectedServerId", "server_id", "serverId")
+
+
+def _trace_observed_server(args: Mapping[str, Any]) -> str:
+    observed = _observed_trace(args)
+    return _trace_value(observed, args, "result_source_server_id", "resultSourceServerId", "observed_server_id", "observedServerId", "server_id", "serverId")
+
+
+def _trace_expected_connection(args: Mapping[str, Any]) -> str:
+    pending = _pending_trace(args)
+    return _trace_value(pending, args, "expected_connection_id", "expectedConnectionId", "connection_id", "connectionId")
+
+
+def _trace_observed_connection(args: Mapping[str, Any]) -> str:
+    observed = _observed_trace(args)
+    return _trace_value(observed, args, "observed_connection_id", "observedConnectionId", "connection_id", "connectionId")
+
+
+def _trace_expected_event(args: Mapping[str, Any]) -> str:
+    pending = _pending_trace(args)
+    return _trace_value(pending, args, "stream_event_id", "streamEventId", "event_id", "eventId")
+
+
+def _trace_observed_event(args: Mapping[str, Any]) -> str:
+    observed = _observed_trace(args)
+    return _trace_value(observed, args, "stream_event_id", "streamEventId", "event_id", "eventId")
+
+
+def _trace_jsonrpc_id(args: Mapping[str, Any]) -> str:
+    observed = _observed_trace(args)
+    pending = _pending_trace(args)
+    return _trace_value(observed, pending or args, "jsonrpc_id", "jsonrpcId", "id", "request_id", "requestId")
+
+
+def _is_trace_result_event(args: Mapping[str, Any]) -> bool:
+    event_kind = _lower(args.get("event_kind") or args.get("eventKind"))
+    observed = _observed_trace(args)
+    observed_kind = _lower(observed.get("event_kind") or observed.get("eventKind"))
+    observed_method = _trace_observed_method(args)
+    return (
+        event_kind in {"tool_result", "result", "mcp_tool_result", "stream_result"}
+        or observed_kind in {"tool_result", "result", "mcp_tool_result", "stream_result"}
+        or "result" in observed_method
+        or bool(observed)
+    )
+
+
+def _trace_has_any_identity(args: Mapping[str, Any]) -> bool:
+    return any(
+        (
+            _trace_jsonrpc_id(args),
+            _trace_expected_server(args),
+            _trace_observed_server(args),
+            _trace_expected_connection(args),
+            _trace_observed_connection(args),
+            _trace_expected_tool(args),
+            _trace_observed_tool(args),
+            _trace_expected_event(args),
+            _trace_observed_event(args),
+        )
+    )
+
+
+def _stdio_frame_boundary_artifact(args: Mapping[str, Any], result_text: str) -> bool:
+    source_type = _lower(args.get("source_type") or args.get("sourceType") or args.get("event_kind") or args.get("eventKind"))
+    transport = _lower(args.get("transport"))
+    if "docs" in source_type or "tutorial" in source_type or _is_doc_context_tool(_lower(args.get("tool_name") or "")):
+        return False
+    if source_type not in {"tool_result", "transport_frame", "stream_event", "mcp_tool_result"} and transport not in {"stdio", "unknown"}:
+        return False
+    blob = "\n".join(
+        _collect_values_for_keys(args, {"content", "body", "message", "text", "frame", "raw_frame", "transport_artifact"})
+        + ([result_text] if result_text else [])
+    )
+    return "content-length:" in blob and ("\r\n\r\n" in blob or "\\r\\n\\r\\n" in blob) and '"jsonrpc"' in blob
+
+
 def _external_destination_in_args(obj: Any) -> bool:
     return any(_has_external_http(value) for _, value in _iter_string_args(obj, {"url", "endpoint", "target_url", "to", "body", "content", "message"}))
 
@@ -1435,6 +1560,92 @@ def scan_tool_call_validators(
                 matched_text=public_blob[:180],
                 tags=["exfil", "public_update"],
             ))
+
+    # MCP runtime trace integrity. These checks use explicit structured
+    # request/result identity metadata only; they do not parse live transport
+    # streams or infer violations from ordinary action payloads.
+    expected_tool = _trace_expected_tool(args)
+    observed_tool = _trace_observed_tool(args)
+    expected_server = _trace_expected_server(args)
+    observed_server = _trace_observed_server(args)
+    expected_connection = _trace_expected_connection(args)
+    observed_connection = _trace_observed_connection(args)
+    expected_event = _trace_expected_event(args)
+    observed_event = _trace_observed_event(args)
+    trace_result_event = _is_trace_result_event(args)
+    trace_identity_present = _trace_has_any_identity(args)
+
+    if trace_result_event and expected_tool and observed_tool and expected_tool != observed_tool:
+        matches.append(_mk(
+            rule_id="mcp_trace.response_request_mismatch",
+            severity="high",
+            risk=0.82,
+            decision_hint="require_approval",
+            reason_code="mcp_response_request_mismatch",
+            matched_text=f"{expected_tool}->{observed_tool}"[:180],
+            tags=["mcp", "runtime_trace"],
+        ))
+        matches.append(_mk(
+            rule_id="mcp_trace.foreign_tool_result_injection",
+            severity="high",
+            risk=0.84,
+            decision_hint="block",
+            reason_code="mcp_foreign_tool_result_injection",
+            matched_text=f"{expected_tool}->{observed_tool}"[:180],
+            tags=["mcp", "runtime_trace"],
+        ))
+
+    source_mismatch = (
+        (expected_server and observed_server and expected_server != observed_server)
+        or (expected_connection and observed_connection and expected_connection != observed_connection)
+    )
+    if trace_result_event and source_mismatch:
+        matches.append(_mk(
+            rule_id="mcp_trace.result_source_mismatch",
+            severity="critical",
+            risk=0.88,
+            decision_hint="block",
+            reason_code="mcp_result_source_mismatch",
+            matched_text=f"{expected_server}/{expected_connection}->{observed_server}/{observed_connection}"[:180],
+            tags=["mcp", "runtime_trace"],
+        ))
+
+    if trace_result_event and expected_event and observed_event and expected_event == observed_event and source_mismatch:
+        matches.append(_mk(
+            rule_id="mcp_trace.stream_event_identity_collision",
+            severity="critical",
+            risk=0.88,
+            decision_hint="block",
+            reason_code="mcp_stream_event_identity_collision",
+            matched_text=observed_event[:180],
+            tags=["mcp", "runtime_trace"],
+        ))
+
+    if trace_result_event and trace_identity_present and not _pending_trace(args):
+        explicit_unbound = bool(args.get("no_pending_request") or args.get("unbound_result") or args.get("pending_request_missing"))
+        request_state = _lower(args.get("request_state") or args.get("requestState"))
+        has_expected_binding = bool(expected_tool or expected_server or expected_connection or expected_event)
+        if explicit_unbound or request_state in {"canceled", "cancelled", "expired"} or not has_expected_binding:
+            matches.append(_mk(
+                rule_id="mcp_trace.unbound_tool_result",
+                severity="critical",
+                risk=0.86,
+                decision_hint="block",
+                reason_code="mcp_unbound_tool_result",
+                matched_text=_trace_jsonrpc_id(args)[:180],
+                tags=["mcp", "runtime_trace"],
+            ))
+
+    if _stdio_frame_boundary_artifact(args, res):
+        matches.append(_mk(
+            rule_id="mcp_trace.stdio_frame_boundary_artifact",
+            severity="high",
+            risk=0.78,
+            decision_hint="require_approval",
+            reason_code="mcp_stdio_frame_boundary_artifact",
+            matched_text="stdio content-length jsonrpc frame",
+            tags=["mcp", "runtime_trace"],
+        ))
 
     # MCP resources can carry executable/hidden markup while claiming a text MIME.
     resource_read_tool = any(marker in name for marker in ("resources/read", "mcp.resources/read", "resource/read"))

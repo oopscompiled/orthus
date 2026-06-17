@@ -141,9 +141,16 @@ Examples:
 - `payment_card_enumeration`
 - `mcp_shadow_endpoint_access`
 - `tool_oracle_iteration_risk`
+- `mcp_response_request_mismatch`
+- `mcp_result_source_mismatch`
+- `mcp_jsonrpc_id_reuse`
+- `mcp_foreign_tool_result_injection`
+- `mcp_stream_event_identity_collision`
+- `mcp_stdio_frame_boundary_artifact`
+- `mcp_unbound_tool_result`
 
 Meaning:
-- Suspicious MCP/session/protocol lifecycle behavior.
+- Suspicious MCP/session/protocol lifecycle behavior, including tool-result identity mismatches where an MCP/JSON-RPC result is not bound to the exact pending request, server, connection, tool, or stream event identity.
 
 ### Action Provenance / Intent Binding
 

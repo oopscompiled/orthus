@@ -37,6 +37,10 @@ class SessionContext:
     current_allowed_tool_scope: list[str] = field(default_factory=list)
     current_expected_action_kind: str = ""
     recent_untrusted_plan_directives: list[str] = field(default_factory=list)
+    pending_mcp_request_signatures: list[str] = field(default_factory=list)
+    completed_mcp_request_signatures: list[str] = field(default_factory=list)
+    canceled_mcp_request_signatures: list[str] = field(default_factory=list)
+    recent_mcp_trace_violation_markers: list[str] = field(default_factory=list)
 
     @classmethod
     def from_input(cls, value: dict | "SessionContext" | None) -> "SessionContext":
@@ -71,6 +75,10 @@ class SessionContext:
                 current_allowed_tool_scope=[str(v) for v in value.get("current_allowed_tool_scope", [])],
                 current_expected_action_kind=str(value.get("current_expected_action_kind", "")),
                 recent_untrusted_plan_directives=[str(v) for v in value.get("recent_untrusted_plan_directives", [])],
+                pending_mcp_request_signatures=[str(v) for v in value.get("pending_mcp_request_signatures", [])],
+                completed_mcp_request_signatures=[str(v) for v in value.get("completed_mcp_request_signatures", [])],
+                canceled_mcp_request_signatures=[str(v) for v in value.get("canceled_mcp_request_signatures", [])],
+                recent_mcp_trace_violation_markers=[str(v) for v in value.get("recent_mcp_trace_violation_markers", [])],
             )
         return cls()
 
