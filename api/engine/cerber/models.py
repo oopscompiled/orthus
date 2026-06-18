@@ -43,6 +43,11 @@ class SessionContext:
     recent_mcp_trace_violation_markers: list[str] = field(default_factory=list)
     recent_written_artifacts: list[str] = field(default_factory=list)
     recent_cross_protocol_directives: list[str] = field(default_factory=list)
+    recent_poisoned_memory_keys: list[str] = field(default_factory=list)
+    recent_untrusted_physical_evidence: list[str] = field(default_factory=list)
+    recent_delegation_risk_signatures: list[str] = field(default_factory=list)
+    recent_untrusted_identity_proxy_signatures: list[str] = field(default_factory=list)
+    recent_url_exfil_signatures: list[str] = field(default_factory=list)
 
     @classmethod
     def from_input(cls, value: dict | "SessionContext" | None) -> "SessionContext":
@@ -83,6 +88,11 @@ class SessionContext:
                 recent_mcp_trace_violation_markers=[str(v) for v in value.get("recent_mcp_trace_violation_markers", [])],
                 recent_written_artifacts=[str(v) for v in value.get("recent_written_artifacts", [])],
                 recent_cross_protocol_directives=[str(v) for v in value.get("recent_cross_protocol_directives", [])],
+                recent_poisoned_memory_keys=[str(v) for v in value.get("recent_poisoned_memory_keys", [])],
+                recent_untrusted_physical_evidence=[str(v) for v in value.get("recent_untrusted_physical_evidence", [])],
+                recent_delegation_risk_signatures=[str(v) for v in value.get("recent_delegation_risk_signatures", [])],
+                recent_untrusted_identity_proxy_signatures=[str(v) for v in value.get("recent_untrusted_identity_proxy_signatures", [])],
+                recent_url_exfil_signatures=[str(v) for v in value.get("recent_url_exfil_signatures", [])],
             )
         return cls()
 

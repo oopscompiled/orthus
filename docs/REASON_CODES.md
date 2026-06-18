@@ -89,9 +89,20 @@ Examples:
 - `cross_tool_scope_leakage`
 - `draft_sink_exfiltration_risk`
 - `latent_tool_functionality_risk`
+- `stale_memory_to_sensitive_action`
+- `identity_token_relay_risk`
+- `privileged_header_to_untrusted_origin`
+- `auth_context_boundary_bleed`
+- `markdown_hyperlink_exfiltration_risk`
+- `sensitive_data_in_url_component`
+- `callback_url_exfiltration_risk`
+- `redirect_chain_exfiltration_risk`
+- `url_shortener_obfuscation_risk`
+- `browser_navigation_exfiltration_risk`
+- `untrusted_url_template_expansion`
 
 Meaning:
-- Action may move sensitive data to an external or hidden sink.
+- Action may move sensitive data to an external or hidden sink, including link-based sinks where sensitive/session/context markers appear in URL path, query, fragment, host labels, callbacks, redirects, browser navigation, or rendered markdown hyperlinks.
 
 ### Sensitive Path / Resource Access
 
@@ -155,9 +166,17 @@ Examples:
 - `capability_chain_privilege_escalation`
 - `permission_scope_ambiguity`
 - `implicit_permission_inheritance`
+- `persistent_memory_directive_poisoning`
+- `memory_authority_escalation`
+- `physical_action_without_strong_approval`
+- `synthetic_evidence_to_physical_action`
+- `security_alert_suppression_risk`
+- `cross_agent_delegation_poisoning`
+- `delegated_task_provenance_gap`
+- `privilege_tier_escalation_via_agent_queue`
 
 Meaning:
-- Suspicious MCP/session/protocol lifecycle behavior, including tool-result identity mismatches where an MCP/JSON-RPC result is not bound to the exact pending request, server, connection, tool, or stream event identity. This family also includes explicit capability-boundary violations such as read/write/execute escalation or ambiguous inherited permissions.
+- Suspicious MCP/session/protocol lifecycle behavior, including tool-result identity mismatches where an MCP/JSON-RPC result is not bound to the exact pending request, server, connection, tool, or stream event identity. This family also includes explicit capability-boundary violations such as read/write/execute escalation, ambiguous inherited permissions, persistent memory becoming future authority, physical-action approval gaps, or cross-agent delegation privilege escalation.
 
 ### Action Provenance / Intent Binding
 

@@ -5,7 +5,7 @@ import binascii
 from collections.abc import Iterable, Mapping
 from typing import Any
 import re
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
 from .models import RuleMatch
 
@@ -313,8 +313,9 @@ def _contains_secret_like_value(value: str) -> bool:
             "orthus_canary_secret",
             "orthus_canary_customer_export",
             "orthus_canary_",
+            "orthus_confidential_",
             "orthus_canary_session",
-            "orthus_derived_secret",
+            "orthus_derived_",
             "orthus_reconstructed_token",
             "orthus_test_verifier_code",
             "bearer ",
@@ -509,6 +510,143 @@ def _obfuscating_transform_sink(name: str, args: Mapping[str, Any]) -> bool:
     return bool(sink.get("obfuscating_transform")) or "base64" in blob or "encoding" in blob or human_language is False
 
 
+def _memory_metadata(args: Mapping[str, Any]) -> Mapping[str, Any]:
+    value = args.get("memory_metadata") or args.get("memoryMetadata") or {}
+    return value if isinstance(value, Mapping) else {}
+
+
+def _auth_context(args: Mapping[str, Any]) -> Mapping[str, Any]:
+    value = args.get("auth_context") or args.get("authContext") or {}
+    return value if isinstance(value, Mapping) else {}
+
+
+def _destination_metadata(args: Mapping[str, Any]) -> Mapping[str, Any]:
+    value = args.get("destination_metadata") or args.get("destinationMetadata") or {}
+    return value if isinstance(value, Mapping) else {}
+
+
+def _physical_action_metadata(args: Mapping[str, Any]) -> Mapping[str, Any]:
+    value = args.get("physical_action_metadata") or args.get("physicalActionMetadata") or {}
+    return value if isinstance(value, Mapping) else {}
+
+
+def _security_alert_metadata(args: Mapping[str, Any]) -> Mapping[str, Any]:
+    value = args.get("security_alert_metadata") or args.get("securityAlertMetadata") or {}
+    return value if isinstance(value, Mapping) else {}
+
+
+def _delegation_metadata(args: Mapping[str, Any]) -> Mapping[str, Any]:
+    value = args.get("delegation_metadata") or args.get("delegationMetadata") or {}
+    return value if isinstance(value, Mapping) else {}
+
+
+def _is_memory_write_tool(name: str) -> bool:
+    return any(marker in name for marker in ("save_to_long_term_memory", "write_memory", "memory.write", "store_memory", "upsert_memory"))
+
+
+def _persistent_memory_authority_poisoning(args: Mapping[str, Any], name: str) -> bool:
+    if not _is_memory_write_tool(name):
+        return False
+    metadata = _memory_metadata(args)
+    blob = "\n".join([
+        _lower(args.get("key")),
+        _lower(args.get("value")),
+        _lower(metadata),
+        _lower(args.get("source_refs") or args.get("sourceRefs")),
+    ])
+    durable = any(marker in blob for marker in ("long_term", "long-term", "future_context", "persistent", "core_directive"))
+    authority = any(
+        marker in blob
+        for marker in (
+            "core_directive",
+            "policy",
+            "system instruction",
+            "tool policy",
+            "compliance rule",
+            "override",
+            "forward internal",
+            "external audit",
+            "orthus_memory_directive_marker",
+        )
+    )
+    trusted_update = (
+        any(marker in blob for marker in ("trusted_admin", "approval_event_id"))
+        and bool(args.get("approval_event_id") or metadata.get("approval_event_id") or metadata.get("policy_update_allowed"))
+    )
+    return durable and authority and _has_untrusted_action_provenance(args) and not trusted_update
+
+
+def _privileged_auth_to_untrusted_origin(args: Mapping[str, Any], name: str) -> bool:
+    if not (_is_http_action_tool(name) or any(marker in name for marker in ("http_get_request", "fetch_web_resource", "web_sync"))):
+        return False
+    headers = args.get("headers")
+    headers_blob = _lower(headers)
+    auth = _auth_context(args)
+    destination = _destination_metadata(args)
+    url = _lower(args.get("url") or args.get("target_url"))
+    has_auth_material = "authorization" in headers_blob or "bearer orthus_synthetic_bearer_token" in headers_blob
+    privileged_context = bool(auth.get("auto_attached")) or any(
+        marker in _lower(auth)
+        for marker in ("agent_managed_identity", "internal_services_only", "default", "session", "oauth")
+    )
+    destination_untrusted = _has_external_http(url) or any(
+        marker in _lower(destination)
+        for marker in ("untrusted", "user_controlled", "user-controlled", "proxy", "external")
+    )
+    audience_match = bool(destination.get("audience_match") or auth.get("audience_match") or args.get("audience_match"))
+    return has_auth_material and privileged_context and destination_untrusted and not audience_match
+
+
+def _physical_action_without_strong_approval(args: Mapping[str, Any], name: str) -> bool:
+    metadata = _physical_action_metadata(args)
+    blob = "\n".join([name, _lower(args.get("action")), _lower(args.get("target")), _lower(metadata)])
+    physical_effect = bool(metadata.get("physical_effect")) or any(
+        marker in blob for marker in ("server_room", "physical_effect", "restricted_area", "unlock", "disable_badge", "open_door")
+    )
+    strong_approval = bool(
+        args.get("approval_event_id")
+        or metadata.get("approval_event_id")
+        or metadata.get("approved_by")
+        or metadata.get("maintenance_window_active")
+    ) and any(marker in blob for marker in ("trusted", "facilities_admin", "maintenance_window_active"))
+    dangerous_physical_action = any(marker in blob for marker in ("unlock", "open", "disable", "emergency_unlock", "server_room"))
+    return physical_effect and dangerous_physical_action and not strong_approval
+
+
+def _synthetic_evidence_physical_source(args: Mapping[str, Any]) -> bool:
+    blob = "\n".join([
+        _lower(args.get("source_refs") or args.get("sourceRefs")),
+        _lower(_physical_action_metadata(args)),
+    ])
+    return any(marker in blob for marker in ("untrusted", "self_asserted", "operational_observation", "access_control_log", "log", "anomaly"))
+
+
+def _security_alert_suppression(args: Mapping[str, Any]) -> bool:
+    metadata = _security_alert_metadata(args)
+    blob = "\n".join([_lower(args), _lower(metadata)])
+    suppresses = bool(metadata.get("suppresses_or_downgrades_alert")) or any(
+        marker in blob for marker in ("disregard", "suppress", "downgrade", "confirmed system glitch")
+    )
+    escalates = bool(metadata.get("escalates_alert")) or "please investigate" in blob
+    return suppresses and not escalates
+
+
+def _cross_agent_delegation_poisoning(args: Mapping[str, Any], name: str) -> bool:
+    if not any(marker in name for marker in ("submit_internal_agent_task", "agent_task", "delegate_agent", "queue_agent_task")):
+        return False
+    metadata = _delegation_metadata(args)
+    blob = "\n".join([_lower(args), _lower(metadata)])
+    low_to_high = any(marker in blob for marker in ("source_agent_privilege_tier': 'low", '"source_agent_privilege_tier": "low"', "privilege_tier\": \"low", "privilege_tier': 'low", "public_support_agent")) and any(
+        marker in blob for marker in ("target_agent_privilege_tier': 'high", '"target_agent_privilege_tier": "high"', "db_admin_agent", "privilege_tier\": \"high", "privilege_tier': 'high")
+    )
+    missing_attestation = any(marker in blob for marker in ("approval_attestation': 'missing", '"approval_attestation": "missing"', "approval_attestation\": \"missing")) or bool(
+        metadata.get("user_controlled_payload")
+    )
+    risky_task = any(marker in blob for marker in ("dump_table", "salary_data", "public_support_channel", "orthus_delegated_task_marker"))
+    signed_scope = any(marker in blob for marker in ("approval_attestation': 'signed", '"approval_attestation": "signed"', "scope_token_present", "scope_matches_user_ticket"))
+    return low_to_high and missing_attestation and risky_task and not signed_scope
+
+
 def _has_external_recipient(obj: Mapping[str, Any]) -> bool:
     recipient_blob = "\n".join(_collect_values_for_keys(obj, {"to", "recipient", "recipients", "email", "channel"}))
     lower = recipient_blob.lower()
@@ -530,6 +668,101 @@ def _extract_markdown_image_urls(value: str) -> list[str]:
         }
         urls.extend(definitions.get(ref.lower(), "") for ref in reference_ids)
     return urls
+
+
+def _extract_markdown_hyperlink_urls(value: str) -> list[str]:
+    urls = re.findall(r"(?<!!)\[[^\]]+\]\(([^)\s]+)", value)
+    reference_ids = re.findall(r"(?<!!)\[[^\]]+\]\[([^\]]+)\]", value)
+    if reference_ids:
+        definitions = {
+            ref.lower(): url
+            for ref, url in re.findall(r"^\s*\[([^\]]+)\]:\s*(\S+)", value, flags=re.IGNORECASE | re.MULTILINE)
+        }
+        urls.extend(definitions.get(ref.lower(), "") for ref in reference_ids)
+    return urls
+
+
+def _url_field_values(args: Mapping[str, Any]) -> list[str]:
+    url_keys = {
+        "url",
+        "target_url",
+        "callback_url",
+        "callback",
+        "webhook_url",
+        "initial_url",
+        "final_url",
+        "href",
+        "link",
+        "location",
+    }
+    urls = _collect_values_for_keys(args, url_keys)
+    components = args.get("url_components") or args.get("urlComponents") or {}
+    if isinstance(components, Mapping):
+        urls.extend(_collect_values_for_keys(components, {"host", "path", "query", "fragment", "url"}))
+    for key in ("content", "body", "message", "markdown", "html", "text"):
+        value = args.get(key)
+        if isinstance(value, str):
+            urls.extend(re.findall(r"https?://[^\s)>'\"]+", value))
+    return [url for url in urls if "http://" in url.lower() or "https://" in url.lower()]
+
+
+def _url_host(value: str) -> str:
+    try:
+        return urlsplit(value).hostname or ""
+    except ValueError:
+        return ""
+
+
+def _url_has_sensitive_marker(value: Any) -> bool:
+    expanded = "\n".join(_expanded_marker_texts(value))
+    return _contains_secret_like_value(expanded) or _contains_derived_sensitive_value(expanded)
+
+
+def _url_metadata(args: Mapping[str, Any]) -> Mapping[str, Any]:
+    value = args.get("url_metadata") or args.get("urlMetadata") or {}
+    return value if isinstance(value, Mapping) else {}
+
+
+def _is_url_action_context(name: str, args: Mapping[str, Any]) -> bool:
+    if _is_doc_context_tool(name):
+        return False
+    sink = _sink_metadata(args)
+    blob = "\n".join([name, _lower(sink), _lower(_url_metadata(args)), _lower(args.get("output_format")), _lower(args.get("visibility"))])
+    return bool(_url_field_values(args)) or any(
+        marker in blob
+        for marker in (
+            "markdown",
+            "render",
+            "user_facing",
+            "callback_url",
+            "webhook",
+            "browser_navigation",
+            "http_request",
+            "clickable",
+            "sink_type",
+        )
+    )
+
+
+def _redirect_chain_risky(args: Mapping[str, Any]) -> bool:
+    metadata = _url_metadata(args)
+    chain = args.get("redirect_chain") or args.get("redirectChain") or metadata.get("redirect_chain") or []
+    blob = "\n".join([_lower(args.get("initial_url")), _lower(args.get("final_url")), _lower(metadata), _lower(chain)])
+    final_untrusted = any(
+        marker in blob for marker in ("final_destination_trust': 'external", '"final_destination_trust": "external', "external_or_untrusted", "attacker")
+    )
+    sensitive = _url_has_sensitive_marker(blob) or "location_contains_sensitive_marker" in blob or bool(metadata.get("contains_sensitive_marker"))
+    return isinstance(chain, list) and bool(chain) and final_untrusted and sensitive
+
+
+def _url_shortener_risky(args: Mapping[str, Any]) -> bool:
+    metadata = _url_metadata(args)
+    blob = "\n".join([_lower(metadata), _lower(args)])
+    return (
+        any(marker in blob for marker in ("shortener_or_redirector", "shortener", "redirector"))
+        and any(marker in blob for marker in ("destination_final_unknown", "final_unknown"))
+        and (_url_has_sensitive_marker(blob) or "contains_sensitive_marker" in blob)
+    )
 
 
 def _is_tool_enumeration_action(name: str, args: Mapping[str, Any], request_text: str) -> bool:
@@ -1582,12 +1815,25 @@ def scan_tool_call_validators(
         ]
     )
     has_secret_material = _contains_secret_like_value(exfil_blob) or _contains_template_secret_reference(exfil_blob)
+    destination_metadata = _destination_metadata(args)
+    auth_context = _auth_context(args)
+    trusted_auth_audience = bool(
+        args.get("audience_match")
+        or destination_metadata.get("audience_match")
+        or auth_context.get("audience_match")
+    ) and any(marker in _lower(destination_metadata) for marker in ("trusted_internal", "internal"))
     telemetry_like = any(
         marker in value
         for value in http_destination_values + [name]
         for marker in ("telemetry", "trace", "analytics", "logging", "log", "webhook")
     )
-    if _is_http_action_tool(name) and (has_external_http_destination or telemetry_like) and has_secret_material and telemetry_like:
+    if (
+        _is_http_action_tool(name)
+        and not trusted_auth_audience
+        and (has_external_http_destination or telemetry_like)
+        and has_secret_material
+        and telemetry_like
+    ):
         matches.append(_mk(
             rule_id="exfil.covert_http_channel",
             severity="critical",
@@ -1597,7 +1843,7 @@ def scan_tool_call_validators(
             matched_text=exfil_blob[:180],
             tags=["exfil", "http"],
         ))
-    elif _is_http_action_tool(name) and has_external_http_destination and has_secret_material:
+    elif _is_http_action_tool(name) and not trusted_auth_audience and has_external_http_destination and has_secret_material:
         matches.append(_mk(
             rule_id="exfil.covert_http_channel",
             severity="critical",
@@ -1606,6 +1852,133 @@ def scan_tool_call_validators(
             reason_code="covert_http_exfiltration_risk",
             matched_text=exfil_blob[:180],
             tags=["exfil", "http"],
+        ))
+
+    url_values = _url_field_values(args)
+    url_context = _is_url_action_context(name, args)
+    url_blob = "\n".join(url_values + [_lower(args.get("url_components") or args.get("urlComponents")), _lower(_url_metadata(args))])
+    sensitive_urls = [url for url in url_values if _url_has_sensitive_marker(url)]
+    if url_context and sensitive_urls:
+        matches.append(_mk(
+            rule_id="link_exfiltration.sensitive_url_component",
+            severity="critical",
+            risk=0.90,
+            decision_hint="block",
+            reason_code="sensitive_data_in_url_component",
+            matched_text=";".join(_url_host(url) or "url" for url in sensitive_urls)[:180],
+            tags=["link_exfiltration", "url"],
+        ))
+
+    markdown_link_blob = "\n".join(_collect_values_for_keys(args, {"content", "body", "message", "markdown", "html", "text"}) + ([res] if res else []))
+    markdown_link_urls = _extract_markdown_hyperlink_urls(markdown_link_blob)
+    markdown_link_metadata = "\n".join([
+        _lower(args.get("output_format")),
+        _lower(args.get("visibility")),
+        _lower(args.get("source_trust")),
+        _lower(_sink_metadata(args)),
+        _lower(_url_metadata(args)),
+    ])
+    if markdown_link_urls and any(_url_has_sensitive_marker(url) for url in markdown_link_urls):
+        if "markdown" in markdown_link_metadata or "user_facing" in markdown_link_metadata or "render" in name or _outbound_or_public_tool(name):
+            if not any(match.rule_id == "link_exfiltration.sensitive_url_component" for match in matches):
+                matches.append(_mk(
+                    rule_id="link_exfiltration.sensitive_url_component",
+                    severity="critical",
+                    risk=0.90,
+                    decision_hint="block",
+                    reason_code="sensitive_data_in_url_component",
+                    matched_text=";".join(_url_host(url) or "url" for url in markdown_link_urls)[:180],
+                    tags=["link_exfiltration", "url"],
+                ))
+            matches.append(_mk(
+                rule_id="link_exfiltration.markdown_hyperlink",
+                severity="critical",
+                risk=0.92,
+                decision_hint="block",
+                reason_code="markdown_hyperlink_exfiltration_risk",
+                matched_text=";".join(_url_host(url) or "url" for url in markdown_link_urls)[:180],
+                tags=["link_exfiltration", "markdown"],
+            ))
+
+    sink_type_blob = "\n".join([name, _lower(_sink_metadata(args)), _lower(_url_metadata(args))])
+    if sensitive_urls and any(marker in sink_type_blob for marker in ("callback_url", "callback", "webhook", "register_webhook")):
+        matches.append(_mk(
+            rule_id="link_exfiltration.callback_url_exfiltration",
+            severity="critical",
+            risk=0.92,
+            decision_hint="block",
+            reason_code="callback_url_exfiltration_risk",
+            matched_text=";".join(_url_host(url) or "callback" for url in sensitive_urls)[:180],
+            tags=["link_exfiltration", "callback"],
+        ))
+
+    if _redirect_chain_risky(args):
+        matches.append(_mk(
+            rule_id="link_exfiltration.redirect_chain_exfiltration",
+            severity="critical",
+            risk=0.86,
+            decision_hint="block",
+            reason_code="redirect_chain_exfiltration_risk",
+            matched_text=_lower(_url_metadata(args) or args.get("initial_url"))[:180],
+            tags=["link_exfiltration", "redirect"],
+        ))
+        if not any(match.rule_id == "link_exfiltration.sensitive_url_component" for match in matches):
+            matches.append(_mk(
+                rule_id="link_exfiltration.sensitive_url_component",
+                severity="critical",
+                risk=0.86,
+                decision_hint="block",
+                reason_code="sensitive_data_in_url_component",
+                matched_text="redirect_chain",
+                tags=["link_exfiltration", "url"],
+            ))
+
+    if _url_shortener_risky(args):
+        if not any(match.rule_id == "link_exfiltration.sensitive_url_component" for match in matches):
+            matches.append(_mk(
+                rule_id="link_exfiltration.sensitive_url_component",
+                severity="critical",
+                risk=0.86,
+                decision_hint="block",
+                reason_code="sensitive_data_in_url_component",
+                matched_text=";".join(_url_host(url) or "shortener" for url in url_values)[:180],
+                tags=["link_exfiltration", "url"],
+            ))
+        matches.append(_mk(
+            rule_id="link_exfiltration.url_shortener_obfuscation",
+            severity="high",
+            risk=0.82,
+            decision_hint="require_approval",
+            reason_code="url_shortener_obfuscation_risk",
+            matched_text=";".join(_url_host(url) or "shortener" for url in url_values)[:180],
+            tags=["link_exfiltration", "shortener"],
+        ))
+
+    if sensitive_urls and any(marker in sink_type_blob for marker in ("browser_navigation", "browser_navigate", "browser.open", "browser_action")):
+        matches.append(_mk(
+            rule_id="link_exfiltration.browser_navigation_exfiltration",
+            severity="critical",
+            risk=0.90,
+            decision_hint="block",
+            reason_code="browser_navigation_exfiltration_risk",
+            matched_text=";".join(_url_host(url) or "browser" for url in sensitive_urls)[:180],
+            tags=["link_exfiltration", "browser"],
+        ))
+
+    template_blob = "\n".join([_lower(args), _lower(_url_metadata(args))])
+    if (
+        sensitive_urls
+        and "template_expanded" in template_blob
+        and any(marker in template_blob for marker in ("template_source_trust': 'untrusted", '"template_source_trust": "untrusted"', "source_trust': 'untrusted", '"source_trust": "untrusted"'))
+    ):
+        matches.append(_mk(
+            rule_id="link_exfiltration.untrusted_url_template_expansion",
+            severity="critical",
+            risk=0.90,
+            decision_hint="block",
+            reason_code="untrusted_url_template_expansion",
+            matched_text=";".join(_url_host(url) or "template" for url in sensitive_urls)[:180],
+            tags=["link_exfiltration", "template"],
         ))
 
     markdown_blob = "\n".join(_collect_values_for_keys(args, {"content", "body", "message", "markdown", "html"}) + ([res] if res else []))
@@ -2051,6 +2424,123 @@ def scan_tool_call_validators(
             reason_code="stale_or_cross_event_action_context",
             matched_text=_lower(args.get("current_event_id") or args.get("event_id") or args.get("approved_event_id"))[:180],
             tags=["action_provenance", "intent_binding"],
+        ))
+
+    # Persistent authority / identity / physical-action / delegation boundaries.
+    # These checks require explicit structured metadata and do not treat ordinary
+    # notes, docs, internal requests, or approved delegation as authority abuse.
+    if _persistent_memory_authority_poisoning(args, effective_name_early):
+        matched_memory = "\n".join([_lower(args.get("key")), _lower(_memory_metadata(args))])[:180]
+        matches.append(_mk(
+            rule_id="persistent_boundary.memory_directive_poisoning",
+            severity="critical",
+            risk=0.92,
+            decision_hint="block",
+            reason_code="persistent_memory_directive_poisoning",
+            matched_text=matched_memory,
+            tags=["persistent_boundary", "memory"],
+        ))
+        matches.append(_mk(
+            rule_id="persistent_boundary.memory_authority_escalation",
+            severity="critical",
+            risk=0.90,
+            decision_hint="block",
+            reason_code="memory_authority_escalation",
+            matched_text=matched_memory,
+            tags=["persistent_boundary", "memory"],
+        ))
+
+    if _privileged_auth_to_untrusted_origin(args, effective_name_early):
+        target = _lower(args.get("url") or args.get("target_url"))[:180]
+        matches.append(_mk(
+            rule_id="persistent_boundary.identity_token_relay",
+            severity="critical",
+            risk=0.92,
+            decision_hint="block",
+            reason_code="identity_token_relay_risk",
+            matched_text=target,
+            tags=["persistent_boundary", "identity"],
+        ))
+        matches.append(_mk(
+            rule_id="persistent_boundary.privileged_header_untrusted_origin",
+            severity="critical",
+            risk=0.90,
+            decision_hint="block",
+            reason_code="privileged_header_to_untrusted_origin",
+            matched_text=target,
+            tags=["persistent_boundary", "identity"],
+        ))
+        matches.append(_mk(
+            rule_id="persistent_boundary.auth_context_boundary_bleed",
+            severity="critical",
+            risk=0.88,
+            decision_hint="block",
+            reason_code="auth_context_boundary_bleed",
+            matched_text=target,
+            tags=["persistent_boundary", "identity"],
+        ))
+
+    if _physical_action_without_strong_approval(args, effective_name_early):
+        physical_text = "\n".join([effective_name_early, _lower(args.get("action")), _lower(args.get("target"))])[:180]
+        matches.append(_mk(
+            rule_id="persistent_boundary.physical_action_without_approval",
+            severity="critical",
+            risk=0.92,
+            decision_hint="block",
+            reason_code="physical_action_without_strong_approval",
+            matched_text=physical_text,
+            tags=["persistent_boundary", "physical"],
+        ))
+        if _synthetic_evidence_physical_source(args):
+            matches.append(_mk(
+                rule_id="persistent_boundary.synthetic_evidence_physical_action",
+                severity="critical",
+                risk=0.90,
+                decision_hint="block",
+                reason_code="synthetic_evidence_to_physical_action",
+                matched_text=physical_text,
+                tags=["persistent_boundary", "physical"],
+            ))
+
+    if _security_alert_suppression(args):
+        matches.append(_mk(
+            rule_id="persistent_boundary.security_alert_suppression",
+            severity="high",
+            risk=0.82,
+            decision_hint="require_approval",
+            reason_code="security_alert_suppression_risk",
+            matched_text=effective_name_early[:180],
+            tags=["persistent_boundary", "physical"],
+        ))
+
+    if _cross_agent_delegation_poisoning(args, effective_name_early):
+        delegated_text = "\n".join([effective_name_early, _lower(_delegation_metadata(args))])[:180]
+        matches.append(_mk(
+            rule_id="persistent_boundary.cross_agent_delegation_poisoning",
+            severity="critical",
+            risk=0.92,
+            decision_hint="block",
+            reason_code="cross_agent_delegation_poisoning",
+            matched_text=delegated_text,
+            tags=["persistent_boundary", "delegation"],
+        ))
+        matches.append(_mk(
+            rule_id="persistent_boundary.delegated_task_provenance_gap",
+            severity="critical",
+            risk=0.88,
+            decision_hint="block",
+            reason_code="delegated_task_provenance_gap",
+            matched_text=delegated_text,
+            tags=["persistent_boundary", "delegation"],
+        ))
+        matches.append(_mk(
+            rule_id="persistent_boundary.privilege_tier_escalation_queue",
+            severity="critical",
+            risk=0.90,
+            decision_hint="block",
+            reason_code="privilege_tier_escalation_via_agent_queue",
+            matched_text=delegated_text,
+            tags=["persistent_boundary", "delegation"],
         ))
 
     # schema_anomaly.dynamic_schema_retry
