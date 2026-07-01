@@ -27,4 +27,5 @@ docs/releases
 agent/
 .uv-cache
 AGENTS.md
+BLUEPRINT.md
 .codex

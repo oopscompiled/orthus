@@ -24,6 +24,10 @@ rules:
       any:
         - field: normalized
           regex: "\\b(webhook_url|callback_url|destination_url|external_url)\\b"
+    suppress_if:
+      any:
+        - field: normalized
+          regex: "\\b(search_kb|search_logs|read_documentation|generate_response_draft|search_code)\\b"
 
   - id: schema_anomaly.path_traversal_arg
     description: Path traversal marker
@@ -38,6 +42,10 @@ rules:
           regex: "\\.\\./"
         - field: normalized
           regex: "\\.\\.\\\\"
+    suppress_if:
+      any:
+        - field: normalized
+          regex: "\\b(search_kb|search_logs|read_documentation|generate_response_draft|search_code)\\b"
 
   - id: schema_anomaly.override_policy_key
     description: Suspicious policy override key names

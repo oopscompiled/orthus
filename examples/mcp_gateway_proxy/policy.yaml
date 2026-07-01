@@ -1,0 +1,14 @@
+# Illustrative local policy notes for the MCP gateway/proxy demo.
+# The demo uses Orthus' bundled default policy at runtime.
+
+intent: |
+  Require review when MCP tool metadata changes, schemas become permissive,
+  or a tool call crosses from MCP/tool-result context into external egress.
+
+review:
+  - tools/list with changed descriptions and hidden instructions
+  - tools/register with permissive schemas and risky unknown fields
+  - tools/call that sends sensitive data to external destinations
+
+allow:
+  - approved single-resource read/search/call operations with bounded args

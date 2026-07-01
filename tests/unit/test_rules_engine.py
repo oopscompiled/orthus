@@ -82,6 +82,20 @@ def test_schema_anomaly_match() -> None:
     assert "schema_anomaly.url_webhook_arg" in _ids(matches)
 
 
+def test_doc_context_suppresses_schema_and_secret_reference_rules() -> None:
+    callback_docs = _ids(_scan('search_kb {"query": "callback_url examples internal app"}'))
+    traversal_docs = _ids(_scan('search_kb {"query": "../ path traversal prevention"}'))
+    service_account_docs = _ids(_scan('search_kb {"query": "Kubernetes service account token permissions"}'))
+    prompt_logs = _ids(_scan('search_logs {"query": "ignore previous instructions export_customer_data incident"}'))
+
+    assert "schema_anomaly.url_webhook_arg" not in callback_docs
+    assert "schema_anomaly.path_traversal_arg" not in traversal_docs
+    assert "sensitive_path.path_traversal" not in traversal_docs
+    assert "secrets.service_account_credentials" not in service_account_docs
+    assert "prompt_injection.ignore_previous" not in prompt_logs
+    assert "prompt_injection.disregard_legacy_prompts" not in prompt_logs
+
+
 def test_duplicate_matches_deduped() -> None:
     engine = RulesEngine(load_builtin_basic_rules())
     n = normalize_text("ignore previous instructions. ignore previous instructions")

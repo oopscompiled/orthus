@@ -166,9 +166,23 @@ uv run python examples/mcp_server_guard/demo.py
 uv run python examples/github_copilot_sdk_guard/demo.py
 ```
 
+* OpenAI-style tool-call guard
+
+```bash
+uv run python examples/openai_tool_call_guard/demo.py
+```
+
+* MCP gateway/proxy simulation
+
+```bash
+uv run python examples/mcp_gateway_proxy/proxy.py
+```
+
 ## Docs
 
+* [Blueprint](BLUEPRINT.md)
 * [API](docs/API.md)
+* [Action Event Schema](docs/ACTION_EVENT_SCHEMA.md)
 * [Reason Codes](docs/REASON_CODES.md)
 * [Policy Templates](docs/POLICY_TEMPLATES.md)
 * [GitHub Copilot SDK Integration](docs/integrations/github_copilot_sdk.md)

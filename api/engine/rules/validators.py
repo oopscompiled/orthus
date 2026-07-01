@@ -682,6 +682,12 @@ def _extract_markdown_hyperlink_urls(value: str) -> list[str]:
     return urls
 
 
+def _strip_markdown_code(value: str) -> str:
+    """Remove markdown code regions before active-link/image sink checks."""
+    without_fences = re.sub(r"```.*?```", " ", value, flags=re.DOTALL)
+    return re.sub(r"`[^`]*`", " ", without_fences)
+
+
 def _url_field_values(args: Mapping[str, Any]) -> list[str]:
     url_keys = {
         "url",
@@ -3092,11 +3098,12 @@ def scan_tool_call_validators(
     # exfil.markdown_tracking_pixel
     markdown_content = _lower(args.get("content"))
     if "render_markdown" in name and markdown_content:
+        markdown_active_content = _strip_markdown_code(markdown_content)
         suspicious_placeholder = any(
             token in markdown_content
             for token in ("{{", "}}", "secret", "token", "apikey", "api_key", "password", "b64(", "base64")
         )
-        if "![" in markdown_content and _has_external_http(markdown_content) and suspicious_placeholder:
+        if "![" in markdown_active_content and _has_external_http(markdown_active_content) and suspicious_placeholder:
             matches.append(_mk(
                 rule_id="exfil.markdown_tracking_pixel",
                 severity="high",
@@ -3107,12 +3114,12 @@ def scan_tool_call_validators(
                 tags=["exfil"],
             ))
 
-        has_js_scheme = "](javascript:" in markdown_content
-        has_data_scriptable = "](data:text/html" in markdown_content or "](data:image/svg+xml" in markdown_content
+        has_js_scheme = "](javascript:" in markdown_active_content
+        has_data_scriptable = "](data:text/html" in markdown_active_content or "](data:image/svg+xml" in markdown_active_content
         has_active_markup_context = (
-            ("![" in markdown_content and "](" in markdown_content)
-            or "<img" in markdown_content
-            or "<a " in markdown_content
+            ("![" in markdown_active_content and "](" in markdown_active_content)
+            or "<img" in markdown_active_content
+            or "<a " in markdown_active_content
         )
         if has_js_scheme:
             matches.append(_mk(
@@ -3125,7 +3132,7 @@ def scan_tool_call_validators(
                 tags=["markdown"],
             ))
         if has_data_scriptable or (
-            any(token in markdown_content for token in ("<script", "onerror=", "onload="))
+            any(token in markdown_active_content for token in ("<script", "onerror=", "onload="))
             and has_active_markup_context
         ):
             matches.append(_mk(

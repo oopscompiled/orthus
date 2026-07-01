@@ -1,0 +1,19 @@
+{
+  "id": "safe_tool_call",
+  "title": "Approved MCP tool call",
+  "text": "Call approved invoice lookup tool for a single invoice.",
+  "tool_call": {
+    "name": "tools/call",
+    "args": {
+      "name": "lookup_invoice",
+      "arguments": {
+        "invoice_id": "INV-1001"
+      },
+      "server_id": "billing_mcp",
+      "connection_id": "conn_1",
+      "jsonrpc_id": "1"
+    }
+  },
+  "actor": {"user_id": "dev_1", "role": "developer"},
+  "session_context": {}
+}

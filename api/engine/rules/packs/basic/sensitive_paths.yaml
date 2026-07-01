@@ -56,6 +56,10 @@ rules:
           regex: "(\\.\\./|\\.\\.\\\\)"
         - field: normalized
           regex: "\\$\\{?[A-Za-z_][A-Za-z0-9_]*\\}?.{0,40}(\\.\\./|\\.\\.\\\\)"
+    suppress_if:
+      any:
+        - field: normalized
+          regex: "\\b(search_kb|search_logs|read_documentation|generate_response_draft|search_code)\\b"
 
   - id: sensitive_path.etc_passwd_template
     description: Template-based /etc/passwd reference

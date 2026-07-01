@@ -73,6 +73,8 @@ rules:
       any:
         - field: normalized
           regex: "\\b(research task|documentation|internal training|unit test|test case|test payload|example of|red teaming|security research paper|classify|detect|benchmark)\\b"
+        - field: normalized
+          regex: "\\b(search_kb|search_logs|read_documentation|search_code)\\b"
 
   - id: prompt_injection.new_instruction_injection
     description: Inline instruction injection via role or section markers
@@ -107,6 +109,8 @@ rules:
       any:
         - field: normalized
           regex: "\\b(research task|documentation|internal training|unit test|test case|test payload|example of|red teaming|security research paper|classify|detect|benchmark)\\b"
+        - field: normalized
+          regex: "\\b(search_kb|search_logs|read_documentation|search_code)\\b"
 
   - id: prompt_injection.role_override
     description: Role override language
