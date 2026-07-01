@@ -155,11 +155,25 @@ uv run python examples/openai_tool_call_guard/demo.py
 uv run python examples/mcp_gateway_proxy/proxy.py
 ```
 
+* LangChain-style generic tool guard
+
+```bash
+uv run python examples/langchain_style_tool_guard/demo.py
+```
+
+* Hero demo package
+
+```bash
+for demo in examples/demos/*/demo.py; do uv run python "$demo"; done
+```
+
 ## Docs
 
 * [Blueprint](BLUEPRINT.md)
+* [Integration Guide](docs/INTEGRATION_GUIDE.md)
 * [API](docs/API.md)
 * [Action Event Schema](docs/ACTION_EVENT_SCHEMA.md)
+* [Audit And Replay Design](docs/AUDIT_REPLAY.md)
 * [Reason Codes](docs/REASON_CODES.md)
 * [Policy Templates](docs/POLICY_TEMPLATES.md)
 * [GitHub Copilot SDK Integration](docs/integrations/github_copilot_sdk.md)

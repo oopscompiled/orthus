@@ -1,0 +1,4 @@
+{
+  "decision_in": ["require_approval", "block"],
+  "message": "Text cannot manufacture approval."
+}

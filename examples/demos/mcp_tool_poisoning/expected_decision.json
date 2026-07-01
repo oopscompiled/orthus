@@ -1,0 +1,5 @@
+{
+  "decision_in": ["require_approval", "block"],
+  "must_reason_codes": ["mcp_tool_descriptor_tampering"],
+  "message": "Tool metadata is not authority."
+}

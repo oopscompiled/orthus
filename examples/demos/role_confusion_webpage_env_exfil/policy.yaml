@@ -1,0 +1,3 @@
+# Illustrative policy intent. The demo uses Orthus' bundled default policy.
+block_when:
+  - untrusted webpage context attempts external egress with sensitive material

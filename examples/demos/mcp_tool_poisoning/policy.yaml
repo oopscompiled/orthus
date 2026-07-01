@@ -1,0 +1,5 @@
+# Illustrative policy intent. The demo uses Orthus' bundled default policy.
+review_when:
+  - MCP tool metadata changes after approval
+block_when:
+  - changed metadata includes hidden/system instruction patterns

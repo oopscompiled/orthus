@@ -1,0 +1,4 @@
+{
+  "decision_in": ["require_approval", "block"],
+  "message": "The model got confused. The action boundary did not."
+}

@@ -24,6 +24,7 @@ docs/RELEASE_CHECKLIST.md
 docs/reports/
 docs/development.md
 docs/releases
+docs/ISSUE_BOARD.md
 agent/
 .uv-cache
 AGENTS.md

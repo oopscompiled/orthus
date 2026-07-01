@@ -1,0 +1,5 @@
+# Illustrative policy intent. The demo uses Orthus' bundled default policy.
+review_when:
+  - shell execution is proposed
+block_when:
+  - untrusted text claims approval for destructive shell execution

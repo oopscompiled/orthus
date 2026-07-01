@@ -1,0 +1,4 @@
+{
+  "decision_in": ["allow", "log_only"],
+  "message": "Orthus is not a keyword blocker."
+}
